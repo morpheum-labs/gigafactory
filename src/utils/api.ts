@@ -1,5 +1,6 @@
 import { isTauri, getApiBaseUrl } from './env';
-import type { AgentConfig, AgentEvent, AgentId } from '../types/agent';
+import type { AgentConfig, AgentId } from '../types/agent';
+import type { AgentEvent } from '../types/events';
 import type { SkillInfo, SkillDetail } from '../types/skill';
 import { isAgentEvent } from '../types/events';
 
@@ -71,10 +72,8 @@ function connectWebSocket(): void {
       wsReconnectAttempts = 0;
       
       // Notify listeners that connection is established
-      wsEventListeners.forEach(listener => {
-        // Send a synthetic event to indicate connection (optional)
-        // This could be used for UI feedback
-      });
+      // Send a synthetic event to indicate connection (optional)
+      // This could be used for UI feedback
     };
     
     ws.onmessage = (event) => {
@@ -126,9 +125,7 @@ function connectWebSocket(): void {
         }, delay);
       } else if (wsReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         console.error('[WebSocket] Max reconnection attempts reached. Manual reconnection required.');
-        wsEventListeners.forEach(listener => {
-          // Could emit a connection error event here for UI feedback
-        });
+        // Could emit a connection error event here for UI feedback
       }
     };
   } catch (error) {
@@ -335,7 +332,11 @@ export const api = {
         callback(event.payload);
       });
       return () => {
-        unlisten.then(fn => fn()).catch(() => {});
+        try {
+          unlisten();
+        } catch (error) {
+          // Silently handle any errors during unlisten
+        }
       };
     } else {
       // Web mode: use WebSocket

@@ -34,6 +34,8 @@ export interface LogEntry {
 /** CLI backend: `claude` (default), `cursor` (Cursor Agent CLI), `kilo` (Kilo Code CLI), `gemini` (Gemini CLI), `grok` (Grok CLI), or `deepseek` (DeepSeek CLI). */
 export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek';
 
+export type AgentId = string;
+
 export interface AgentConfig {
   workspaceId: string;
   prompt: string;
