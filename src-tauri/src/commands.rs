@@ -126,7 +126,8 @@ pub async fn check_grok_cli_available() -> Result<bool, String> {
 }
 
 /// Check if the DeepSeek CLI (`deepseek`) is available.
-/// Install: pip install deepseek-cli
+/// Install: Build from Go source - make gosrc-build && make goinstall
+/// See: https://github.com/morpheum-labs/deepseek-cli
 #[tauri::command]
 pub async fn check_deepseek_cli_available() -> Result<bool, String> {
     match Command::new("deepseek").arg("--version").output().await {

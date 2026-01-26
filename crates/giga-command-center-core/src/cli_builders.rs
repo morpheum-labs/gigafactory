@@ -122,14 +122,14 @@ pub fn build_grok_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
 }
 
 pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
-    // DeepSeek CLI: https://github.com/PierrunoYT/deepseek-cli
-    // Binary: `deepseek`
-    // Install: pip install deepseek-cli
-    // Inline mode: -q or --query for query, -m or --model for model selection
-    // Models: deepseek-chat, deepseek-coder, deepseek-reasoner
-    // Streaming is enabled by default
-    // Note: DeepSeek CLI uses -q for inline queries, not -p
-    // System prompts are prepended to the query since there's no separate flag
+    // DeepSeek CLI (Go build): https://github.com/morpheum-labs/deepseek-cli
+    // Binary: `deepseek` (built from gosrc/)
+    // Install: make gosrc-build && make goinstall (or go build from gosrc/)
+    // Single prompt mode: deepseek chat "prompt" [flags]
+    // Interactive mode: deepseek [flags] (not used here, we use chat mode)
+    // Models: deepseek-chat (cloud), deepseek-coder:6.7b (local), deepseek-reasoner (cloud)
+    // Flags: --model/-m, --api-key/-k, --local/-l, --ollama-host, --stream/-s, --thinking
+    // System prompts: Use DEEPSEEK_SYSTEM_MESSAGE env var or prepend to prompt
     let mut query = config.prompt.clone();
     if let Some(sp) = &config.system_prompt {
         if !sp.is_empty() {
@@ -138,12 +138,21 @@ pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) 
     }
     
     let mut args = vec![
-        "-q".to_string(),
+        "chat".to_string(),
         query,
     ];
+    
     if let Some(model) = &config.model {
-        args.push("-m".to_string());
+        args.push("--model".to_string());
         args.push(model.clone());
     }
+    
+    // Enable streaming by default for better UX
+    args.push("--stream".to_string());
+    
+    // Note: --api-key, --local, --ollama-host, --thinking would need to be
+    // passed via environment variables or additional config fields
+    // For now, we rely on environment variables for these settings
+    
     ("deepseek", args)
 }

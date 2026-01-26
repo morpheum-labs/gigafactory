@@ -8,11 +8,13 @@
     "dev:web": "vite --mode web",
     "dev:tauri": "vite --mode tauri",
     "build": "bun run build:web",
-    "build:web": "tsc && vite build --mode web",
-    "build:tauri": "bun run build:web && tauri build",
+    "build:web": "bunx tsc --noEmit && vite build --mode web",
+    "build:web:skip-check": "vite build --mode web",
+    "build:tauri": "bun run build:web && bunx tauri build",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "type-check": "bunx tsc --noEmit",
+    "tauri": "bunx tauri",
+    "tauri:dev": "bunx tauri dev",
     "tauri:build": "bun run build:tauri"
   },
   "dependencies": {

@@ -25,7 +25,8 @@ export function TaskInput() {
   // Load skills on mount
   useEffect(() => {
     loadSkills();
-  }, [loadSkills]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Autofocus the textarea when workspace is selected or app loads
   useEffect(() => {
@@ -41,7 +42,7 @@ export function TaskInput() {
     }
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
     if (!selectedWorkspaceId || !prompt.trim() || isSubmitting) return;
 
@@ -55,6 +56,9 @@ export function TaskInput() {
       await startTask(selectedWorkspaceId, finalPrompt);
       setPrompt('');
       setSelectedSkill(null);
+    } catch (error) {
+      console.error('Failed to start task:', error);
+      // Error is already handled by startTask which sets status message
     } finally {
       setIsSubmitting(false);
     }
@@ -75,7 +79,8 @@ export function TaskInput() {
         const useGrok = cliType === 'grok';
         const useDeepseek = cliType === 'deepseek';
         const ok = useCursor ? cursorCliAvailable : useKilo ? kiloCliAvailable : useGemini ? geminiCliAvailable : useGrok ? grokCliAvailable : useDeepseek ? deepseekCliAvailable : cliAvailable;
-        if (ok !== false || (cliAvailable === null && cursorCliAvailable === null && kiloCliAvailable === null && geminiCliAvailable === null && grokCliAvailable === null && deepseekCliAvailable === null)) return null;
+        // Only hide warning if CLI is confirmed available (true) or all checks are still pending (null)
+        if (ok === true || (cliAvailable === null && cursorCliAvailable === null && kiloCliAvailable === null && geminiCliAvailable === null && grokCliAvailable === null && deepseekCliAvailable === null)) return null;
         return (
           <div className="mb-3 p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-300">
             {useCursor
@@ -87,7 +92,7 @@ export function TaskInput() {
               : useGrok
               ? 'Grok CLI (grok) not found. Install: bun add -g @vibe-kit/grok-cli or npm install -g @vibe-kit/grok-cli'
               : useDeepseek
-              ? 'DeepSeek CLI (deepseek) not found. Install: pip install deepseek-cli'
+              ? 'DeepSeek CLI (deepseek) not found. Install: Build from Go source - make gosrc-build && make goinstall (see https://github.com/morpheum-labs/deepseek-cli)'
               : 'Claude CLI not found. Install it first.'}
           </div>
         );

@@ -8,7 +8,7 @@ pub type WorkspaceId = String;
 /// See: https://github.com/Kilo-Org/kilocode
 /// See: https://github.com/google-gemini/gemini-cli
 /// See: https://github.com/superagent-ai/grok-cli
-/// See: https://github.com/PierrunoYT/deepseek-cli
+/// See: https://github.com/morpheum-labs/deepseek-cli (Go build from gosrc/)
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CliType {

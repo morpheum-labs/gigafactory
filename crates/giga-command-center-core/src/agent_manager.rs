@@ -46,6 +46,9 @@ impl AgentManager {
             CliType::Grok => build_grok_args(&config),
             CliType::DeepSeek => build_deepseek_args(&config),
         };
+        
+        // Track CLI type for output parsing (deepseek outputs plain text, not JSON)
+        let cli_type = (*cli).clone();
 
         let mut cmd = Command::new(binary);
         cmd.args(&args)
@@ -96,7 +99,7 @@ impl AgentManager {
         });
 
         tokio::spawn(async move {
-            Self::process_output(agent_id_clone.clone(), stdout, emit_clone.clone()).await;
+            Self::process_output(agent_id_clone.clone(), stdout, emit_clone.clone(), cli_type).await;
 
             let mut agents = agents_clone.write().await;
             if let Some(handle) = agents.remove(&agent_id_clone) {
@@ -138,7 +141,7 @@ impl AgentManager {
         Ok(agent_id)
     }
 
-    async fn process_output<R, F>(agent_id: AgentId, reader: R, emit_event: F)
+    async fn process_output<R, F>(agent_id: AgentId, reader: R, emit_event: F, cli_type: CliType)
     where
         R: tokio::io::AsyncRead + Unpin,
         F: Fn(AgentEvent) + Send + Sync,
@@ -147,23 +150,82 @@ impl AgentManager {
         let mut lines = reader.lines();
         let mut last_tool_name: Option<String> = None;
 
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
+        // DeepSeek CLI outputs plain text, not JSON
+        let is_deepseek = matches!(cli_type, CliType::DeepSeek);
 
-            match Self::parse_line(&line) {
-                Some(message) => {
-                    if let Some(event) = Self::convert_message(&agent_id, message, &mut last_tool_name) {
-                        emit_event(event);
-                    }
+        while let Ok(Some(line)) = lines.next_line().await {
+            if is_deepseek {
+                // For DeepSeek, treat output as plain text content
+                // The CLI outputs text directly (may include ANSI codes)
+                let cleaned = Self::strip_ansi_codes(&line);
+                
+                // Skip empty lines, control sequences, and status messages
+                if cleaned.trim().is_empty() {
+                    continue;
                 }
-                None => {
-                    // Log unparseable lines but don't fail
-                    eprintln!("Unparseable line: {}", line);
+                
+                // Skip reasoning prefix lines (thinking mode)
+                if cleaned.trim().starts_with("💭 Reasoning:") || cleaned.trim().starts_with("Reasoning:") {
+                    continue;
+                }
+                
+                // Skip "Thinking..." spinner lines (non-streaming mode)
+                if cleaned.trim() == "Thinking..." || cleaned.trim().starts_with("\rThinking...") {
+                    continue;
+                }
+                
+                // Skip control characters and carriage returns
+                if cleaned.trim().starts_with("\r") && cleaned.trim().len() < 20 {
+                    continue;
+                }
+                
+                // Emit content as message event
+                // In streaming mode, this will be called for each chunk/line
+                emit_event(AgentEvent::Message {
+                    agent_id: agent_id.clone(),
+                    content: cleaned,
+                });
+            } else {
+                // For other CLIs (Claude, Cursor, etc.), parse JSON format
+                if line.trim().is_empty() {
+                    continue;
+                }
+                
+                match Self::parse_line(&line) {
+                    Some(message) => {
+                        if let Some(event) = Self::convert_message(&agent_id, message, &mut last_tool_name) {
+                            emit_event(event);
+                        }
+                    }
+                    None => {
+                        // Log unparseable lines but don't fail
+                        eprintln!("Unparseable line: {}", line);
+                    }
                 }
             }
         }
+    }
+    
+    fn strip_ansi_codes(text: &str) -> String {
+        // Simple ANSI code stripper - removes escape sequences
+        let mut result = String::new();
+        let mut chars = text.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' || ch == '\u{001b}' {
+                // Skip escape sequence
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() || next == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        result
     }
 
     fn parse_line(line: &str) -> Option<ClaudeMessage> {

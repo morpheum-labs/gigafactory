@@ -37,7 +37,7 @@ export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepse
 export interface AgentConfig {
   workspaceId: string;
   prompt: string;
-  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, or `deepseek`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/PierrunoYT/deepseek-cli */
+  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, or `deepseek`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/morpheum-labs/deepseek-cli */
   cli?: CliType;
   /** Cursor-only: `agent`, `plan`, or `ask`. Ignored for Claude and Kilo. */
   mode?: string;
