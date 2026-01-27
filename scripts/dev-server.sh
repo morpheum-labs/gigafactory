@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="/Users/hesdx/Documents/morpheumlabs/gigafactory"
 cd "$PROJECT_ROOT"
 
 echo "Building dev-server (giga-command-center-server)..."

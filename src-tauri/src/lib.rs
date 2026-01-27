@@ -23,6 +23,7 @@ pub fn run() {
             check_gemini_cli_available,
             check_grok_cli_available,
             check_deepseek_cli_available,
+            check_all_clis_available,
             list_skills,
             get_skill,
             get_config,

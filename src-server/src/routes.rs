@@ -4,12 +4,14 @@ use axum::{
     response::Json,
 };
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::broadcast;
 use giga_command_center_core::{AgentManager, AgentConfig, AgentId, SkillInfo, SkillDetail, AgentEvent};
 use tokio::process::Command;
 use tokio::fs;
 use std::path::PathBuf;
 use giga_command_center_core::AppConfig;
+use futures_util::future::join_all;
 
 pub async fn start_agent(
     Extension(manager): Extension<Arc<AgentManager>>,
@@ -77,12 +79,44 @@ pub async fn check_cli_available(
         "kilo" => "kilo",
         "gemini" => "gemini",
         "grok" => "grok",
-        "deepseek" => "deepseek",
+        "deepseek" => "deepseek-cli",
         _ => return Json(false),
     };
     
     let result = Command::new(binary).arg("--version").output().await;
     Json(result.map(|o| o.status.success()).unwrap_or(false))
+}
+
+pub async fn check_all_clis_available() -> Json<HashMap<String, bool>> {
+    let clis = vec![
+        ("claude", "claude"),
+        ("cursor", "agent"),
+        ("kilo", "kilo"),
+        ("gemini", "gemini"),
+        ("grok", "grok"),
+        ("deepseek", "deepseek-cli"),
+    ];
+
+    // Check all CLIs in parallel
+    let futures: Vec<_> = clis.iter().map(|(name, binary)| {
+        let binary = binary.to_string();
+        let name = name.to_string();
+        async move {
+            let result = Command::new(&binary).arg("--version").output().await;
+            let available = result.map(|o| o.status.success()).unwrap_or(false);
+            (name, available)
+        }
+    }).collect();
+
+    // Wait for all checks to complete using futures_util::future::join_all
+    let results: Vec<_> = join_all(futures).await;
+    
+    let mut map = HashMap::new();
+    for (name, available) in results {
+        map.insert(name, available);
+    }
+
+    Json(map)
 }
 
 pub async fn list_skills() -> Result<Json<Vec<SkillInfo>>, StatusCode> {

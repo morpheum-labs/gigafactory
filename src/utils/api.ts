@@ -279,6 +279,24 @@ export const api = {
   },
 
   /**
+   * Check all CLIs availability at once
+   */
+  async checkAllClisAvailable(): Promise<Record<string, boolean>> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<Record<string, boolean>>('check_all_clis_available');
+    } else {
+      const response = await fetch(`${getApiBaseUrl()}/api/cli/check`);
+      if (!response.ok) {
+        return {};
+      }
+      return await response.json();
+    }
+  },
+
+  /**
    * List skills
    */
   async listSkills(): Promise<SkillInfo[]> {

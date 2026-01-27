@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::fs;
 use tokio::process::Command;
 use tauri::{AppHandle, Emitter, State};
+use futures_util::future::join_all;
 
 use giga_command_center_core::{AgentManager, AgentConfig, AgentEvent, AgentId, StopReason, SkillInfo, SkillDetail, AppConfig};
 
@@ -125,15 +127,49 @@ pub async fn check_grok_cli_available() -> Result<bool, String> {
     }
 }
 
-/// Check if the DeepSeek CLI (`deepseek`) is available.
+/// Check if the DeepSeek CLI (`deepseek-cli`) is available.
 /// Install: Build from Go source - make gosrc-build && make goinstall
 /// See: https://github.com/morpheum-labs/deepseek-cli
 #[tauri::command]
 pub async fn check_deepseek_cli_available() -> Result<bool, String> {
-    match Command::new("deepseek").arg("--version").output().await {
+    match Command::new("deepseek-cli").arg("--version").output().await {
         Ok(output) => Ok(output.status.success()),
         Err(_) => Ok(false),
     }
+}
+
+/// Check all CLIs availability at once
+#[tauri::command]
+pub async fn check_all_clis_available() -> Result<HashMap<String, bool>, String> {
+    let clis = vec![
+        ("claude", "claude"),
+        ("cursor", "agent"),
+        ("kilo", "kilo"),
+        ("gemini", "gemini"),
+        ("grok", "grok"),
+        ("deepseek", "deepseek-cli"),
+    ];
+
+    // Check all CLIs in parallel
+    let futures: Vec<_> = clis.iter().map(|(name, binary)| {
+        let binary = binary.to_string();
+        let name = name.to_string();
+        async move {
+            let result = Command::new(&binary).arg("--version").output().await;
+            let available = result.map(|o| o.status.success()).unwrap_or(false);
+            (name, available)
+        }
+    }).collect();
+
+    // Wait for all checks to complete
+    let results_vec: Vec<_> = join_all(futures).await;
+    
+    let mut results = HashMap::new();
+    for (name, available) in results_vec {
+        results.insert(name, available);
+    }
+
+    Ok(results)
 }
 
 #[tauri::command]

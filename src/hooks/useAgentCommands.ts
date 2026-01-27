@@ -177,51 +177,12 @@ export function useAgentCommands() {
     [getAgentByWorkspace, removeAgent, removeWorkspace, selectWorkspace, selectAgent, setStatusMessage]
   );
 
-  const checkCliAvailable = useCallback(async (): Promise<boolean> => {
+  // Check all CLIs at once (more efficient)
+  const checkAllClisAvailable = useCallback(async (): Promise<Record<string, boolean>> => {
     try {
-      return await api.checkCliAvailable('claude');
+      return await api.checkAllClisAvailable();
     } catch {
-      return false;
-    }
-  }, []);
-
-  const checkCursorCliAvailable = useCallback(async (): Promise<boolean> => {
-    try {
-      return await api.checkCliAvailable('cursor');
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const checkKiloCliAvailable = useCallback(async (): Promise<boolean> => {
-    try {
-      return await api.checkCliAvailable('kilo');
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const checkGeminiCliAvailable = useCallback(async (): Promise<boolean> => {
-    try {
-      return await api.checkCliAvailable('gemini');
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const checkGrokCliAvailable = useCallback(async (): Promise<boolean> => {
-    try {
-      return await api.checkCliAvailable('grok');
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const checkDeepseekCliAvailable = useCallback(async (): Promise<boolean> => {
-    try {
-      return await api.checkCliAvailable('deepseek');
-    } catch {
-      return false;
+      return {};
     }
   }, []);
 
@@ -230,11 +191,6 @@ export function useAgentCommands() {
     startWorkflowTask,
     stopTask,
     deleteWorkspace,
-    checkCliAvailable,
-    checkCursorCliAvailable,
-    checkKiloCliAvailable,
-    checkGeminiCliAvailable,
-    checkGrokCliAvailable,
-    checkDeepseekCliAvailable,
+    checkAllClisAvailable,
   };
 }

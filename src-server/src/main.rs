@@ -57,6 +57,7 @@ async fn main() {
         .route("/api/agents", get(routes::list_agents))
         .route("/api/agents/all", axum::routing::delete(routes::stop_all_agents))
         .route("/api/cli/check/:cli", get(routes::check_cli_available))
+        .route("/api/cli/check", get(routes::check_all_clis_available))
         .route("/api/skills", get(routes::list_skills))
         .route("/api/skills/:name", get(routes::get_skill))
         .route("/api/config", get(routes::get_config))

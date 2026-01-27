@@ -11,7 +11,7 @@ import { useConfigStore } from './stores/config';
 
 function App() {
   const { setCliAvailable, setCursorCliAvailable, setKiloCliAvailable, setGeminiCliAvailable, setGrokCliAvailable, setDeepseekCliAvailable, setStatusMessage } = useUIStore();
-  const { checkCliAvailable, checkCursorCliAvailable, checkKiloCliAvailable, checkGeminiCliAvailable, checkGrokCliAvailable, checkDeepseekCliAvailable } = useAgentCommands();
+  const { checkAllClisAvailable } = useAgentCommands();
   const { config, loadConfig, isConfigured } = useConfigStore();
   const [showSetup, setShowSetup] = useState(false);
   const [checkingConfig, setCheckingConfig] = useState(true);
@@ -51,31 +51,31 @@ function App() {
   useEffect(() => {
     const check = async () => {
       setStatusMessage('Checking CLIs...');
-      const [claude, cursor, kilo, gemini, grok, deepseek] = await Promise.all([
-        checkCliAvailable(),
-        checkCursorCliAvailable(),
-        checkKiloCliAvailable(),
-        checkGeminiCliAvailable(),
-        checkGrokCliAvailable(),
-        checkDeepseekCliAvailable(),
-      ]);
-      setCliAvailable(claude);
+      const clis = await checkAllClisAvailable();
+      const claude = clis.claude ?? false;
+      const cursor = clis.cursor ?? false;
+      const kilo = clis.kilo ?? false;
+      const gemini = clis.gemini ?? false;
+      const grok = clis.grok ?? false;
+      const deepseek = clis.deepseek ?? false;
+      
+      // Set individual CLI availability states
       setCursorCliAvailable(cursor);
       setKiloCliAvailable(kilo);
       setGeminiCliAvailable(gemini);
       setGrokCliAvailable(grok);
       setDeepseekCliAvailable(deepseek);
+      
+      // Set cliAvailable to true if ANY CLI is available (for StatusBar)
+      const anyCliAvailable = claude || cursor || kilo || gemini || grok || deepseek;
+      setCliAvailable(anyCliAvailable);
+      
       const which = [claude && 'Claude', cursor && 'Cursor', kilo && 'Kilo', gemini && 'Gemini', grok && 'Grok', deepseek && 'DeepSeek'].filter(Boolean).join(', ') || 'none';
       setStatusMessage(which !== 'none' ? 'Ready' : 'No CLI found (Claude, Cursor, Kilo, Gemini, Grok, or DeepSeek)');
     };
     check();
   }, [
-    checkCliAvailable,
-    checkCursorCliAvailable,
-    checkKiloCliAvailable,
-    checkGeminiCliAvailable,
-    checkGrokCliAvailable,
-    checkDeepseekCliAvailable,
+    checkAllClisAvailable,
     setCliAvailable,
     setCursorCliAvailable,
     setKiloCliAvailable,

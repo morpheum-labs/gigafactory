@@ -1116,6 +1116,7 @@ name = "giga-command-center-tauri"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "futures-util",
  "giga-command-center-core",
  "serde",
  "serde_json",

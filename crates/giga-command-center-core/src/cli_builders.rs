@@ -123,9 +123,9 @@ pub fn build_grok_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
 
 pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
     // DeepSeek CLI (Go build): https://github.com/morpheum-labs/deepseek-cli
-    // Binary: `deepseek` (built from gosrc/)
+    // Binary: `deepseek-cli` (built from gosrc/)
     // Install: make gosrc-build && make goinstall (or go build from gosrc/)
-    // Single prompt mode: deepseek chat "prompt" [flags]
+    // Single prompt mode: deepseek-cli chat "prompt" [flags]
     // Interactive mode: deepseek [flags] (not used here, we use chat mode)
     // Models: deepseek-chat (cloud), deepseek-coder:6.7b (local), deepseek-reasoner (cloud)
     // Flags: --model/-m, --api-key/-k, --local/-l, --ollama-host, --stream/-s, --thinking
@@ -154,5 +154,5 @@ pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) 
     // passed via environment variables or additional config fields
     // For now, we rely on environment variables for these settings
     
-    ("deepseek", args)
+    ("deepseek-cli", args)
 }
