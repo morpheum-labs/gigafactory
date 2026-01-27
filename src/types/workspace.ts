@@ -1,6 +1,11 @@
 export type WorkspaceState = 'empty' | 'occupied' | 'working' | 'success' | 'error';
 
-export type ModelId = 'claude-sonnet-4-20250514' | 'claude-opus-4-20250514' | 'claude-3-5-haiku-20241022';
+export type ModelId = 
+  | 'claude-sonnet-4-20250514' 
+  | 'claude-opus-4-20250514' 
+  | 'claude-3-5-haiku-20241022'
+  | 'deepseek-chat'
+  | 'deepseek-reasoner';
 
 /** CLI backend: `claude`, `cursor` (Cursor Agent), `kilo` (Kilo Code), `gemini` (Gemini CLI), `grok` (Grok CLI), or `deepseek` (DeepSeek CLI). */
 export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek';
@@ -37,11 +42,47 @@ export interface Workspace {
   autoRun: boolean;                 // Auto-run when all inputs complete
 }
 
-export const AVAILABLE_MODELS: { id: ModelId; name: string; description: string }[] = [
-  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', description: 'Fast & capable (default)' },
-  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', description: 'Most powerful' },
-  { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fastest, lightweight' },
+export const AVAILABLE_MODELS: { id: ModelId; name: string; description: string; cli?: CliType[] }[] = [
+  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', description: 'Fast & capable (default)', cli: ['claude'] },
+  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', description: 'Most powerful', cli: ['claude'] },
+  { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fastest, lightweight', cli: ['claude'] },
+  { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard chat mode (default)', cli: ['deepseek'] },
+  { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Thinking mode (auto-enabled)', cli: ['deepseek'] },
 ];
+
+/**
+ * Get the default model for a given CLI type
+ * Source for DeepSeek models: https://api-docs.deepseek.com/api/list-models
+ */
+export function getDefaultModelForCli(cli: CliType): ModelId {
+  const defaultModel = AVAILABLE_MODELS.find(
+    (m) => m.cli?.includes(cli) && m.description.toLowerCase().includes('default')
+  ) || AVAILABLE_MODELS.find((m) => m.cli?.includes(cli));
+  
+  if (defaultModel) {
+    return defaultModel.id;
+  }
+  
+  // Fallback defaults
+  switch (cli) {
+    case 'deepseek':
+      return 'deepseek-chat';
+    case 'claude':
+    default:
+      return 'claude-sonnet-4-20250514';
+  }
+}
+
+/**
+ * Check if a model is valid for a given CLI type
+ */
+export function isModelValidForCli(model: ModelId, cli: CliType): boolean {
+  const modelDef = AVAILABLE_MODELS.find((m) => m.id === model);
+  if (!modelDef) return false;
+  // If model has no CLI restriction, it's valid for all
+  if (!modelDef.cli) return true;
+  return modelDef.cli.includes(cli);
+}
 
 export interface DrawingState {
   isDrawing: boolean;
@@ -65,5 +106,5 @@ export const WORKSPACE_STATE_EMOJI: Record<WorkspaceState, string> = {
   error: '❌',
 };
 
-export const MIN_WORKSPACE_SIZE = 100;
+export const MIN_WORKSPACE_SIZE = 200;
 export const DEFAULT_WORKSPACE_SIZE = 200;

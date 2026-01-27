@@ -36,3 +36,7 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
+target/flycheck0/stderr
+target/flycheck0/stdout
+target/flycheck0/stderr
+target/flycheck0/stdout

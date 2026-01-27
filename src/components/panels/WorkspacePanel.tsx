@@ -14,7 +14,7 @@ import { AVAILABLE_MODELS, ModelId, CliType } from '../../types/workspace';
 const WORKFLOW_SECTION_STYLE = "mb-5 p-4 bg-gray-800/50 rounded-lg border border-gray-700";
 
 export function WorkspacePanel() {
-  const { selectedWorkspaceId, selectAgent, showOutputModal } = useUIStore();
+  const { selectedWorkspaceId, selectAgent, showOutputModal, positionEditWorkspaceId, setPositionEditWorkspace } = useUIStore();
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const {
     renameWorkspace,
@@ -107,12 +107,33 @@ export function WorkspacePanel() {
 
       {/* Dimensions */}
       <div className="mb-5 text-base text-gray-400">
-        <p>
-          Position: ({Math.round(workspace.x)}, {Math.round(workspace.y)})
-        </p>
+        <div className="flex items-center justify-between mb-2">
+          <p>
+            Position: ({Math.round(workspace.x)}, {Math.round(workspace.y)})
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (positionEditWorkspaceId === workspace.id) {
+                setPositionEditWorkspace(null);
+              } else {
+                setPositionEditWorkspace(workspace.id);
+              }
+            }}
+            className={positionEditWorkspaceId === workspace.id ? 'bg-blue-600 hover:bg-blue-500' : ''}
+          >
+            {positionEditWorkspaceId === workspace.id ? 'Done' : 'Edit'}
+          </Button>
+        </div>
         <p>
           Size: {Math.round(workspace.width)} × {Math.round(workspace.height)}px
         </p>
+        {positionEditWorkspaceId === workspace.id && (
+          <p className="text-xs text-blue-400 mt-2">
+            Click and drag the workspace box on the canvas to move it
+          </p>
+        )}
       </div>
 
       {/* CLI & Model */}
@@ -161,12 +182,34 @@ export function WorkspacePanel() {
           onChange={(e) => setModel(workspace.id, e.target.value as ModelId)}
           className="w-full bg-gray-800 border border-gray-700 rounded px-4 py-3 text-base text-white focus:border-blue-500 focus:outline-none"
         >
-          {AVAILABLE_MODELS.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name} - {model.description}
-            </option>
-          ))}
+          {AVAILABLE_MODELS
+            .filter((model) => {
+              // If model has cli filter, only show for matching CLI
+              if (model.cli) {
+                return model.cli.includes(workspace.cli ?? 'claude');
+              }
+              // Otherwise show for all CLIs (backward compatibility)
+              return true;
+            })
+            .map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name} - {model.description}
+              </option>
+            ))}
         </select>
+        {workspace.cli === 'deepseek' && (
+          <p className="text-xs text-gray-500 mt-1">
+            Available models: deepseek-chat, deepseek-reasoner. See{' '}
+            <a 
+              href="https://api-docs.deepseek.com/api/list-models" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:underline"
+            >
+              DeepSeek API docs
+            </a>
+          </p>
+        )}
       </div>
 
       {/* System Prompt */}

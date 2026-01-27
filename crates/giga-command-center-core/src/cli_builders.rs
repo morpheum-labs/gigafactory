@@ -127,7 +127,10 @@ pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) 
     // Install: make gosrc-build && make goinstall (or go build from gosrc/)
     // Single prompt mode: deepseek-cli chat "prompt" [flags]
     // Interactive mode: deepseek [flags] (not used here, we use chat mode)
-    // Models: deepseek-chat (cloud), deepseek-coder:6.7b (local), deepseek-reasoner (cloud)
+    // Available cloud models (hardcoded from https://api-docs.deepseek.com/api/list-models):
+    //   - deepseek-chat (default, standard chat mode)
+    //   - deepseek-reasoner (thinking mode, auto-enabled)
+    // Local models (Ollama): deepseek-coder:6.7b, deepseek-coder:1.3b, deepseek-coder:33b
     // Flags: --model/-m, --api-key/-k, --local/-l, --ollama-host, --stream/-s, --thinking
     // System prompts: Use DEEPSEEK_SYSTEM_MESSAGE env var or prepend to prompt
     let mut query = config.prompt.clone();

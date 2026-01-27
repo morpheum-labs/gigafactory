@@ -26,6 +26,7 @@ interface UIState {
   deepseekCliAvailable: boolean | null;
   outputModalAgentId: string | null;
   editingWorkspaceId: string | null; // For inline name editing
+  positionEditWorkspaceId: string | null; // For position editing mode
   wiring: WiringState;
 
   selectWorkspace: (workspaceId: string | null) => void;
@@ -41,6 +42,7 @@ interface UIState {
   setDeepseekCliAvailable: (available: boolean) => void;
   showOutputModal: (agentId: string | null) => void;
   setEditingWorkspace: (workspaceId: string | null) => void;
+  setPositionEditWorkspace: (workspaceId: string | null) => void;
   startWiring: (workspaceId: string, type: 'input' | 'output', x: number, y: number) => void;
   updateWiring: (x: number, y: number) => void;
   endWiring: () => void;
@@ -61,6 +63,7 @@ export const useUIStore = create<UIState>()(
     deepseekCliAvailable: null,
     outputModalAgentId: null,
     editingWorkspaceId: null,
+    positionEditWorkspaceId: null,
     wiring: {
       isWiring: false,
       fromWorkspaceId: null,
@@ -150,6 +153,12 @@ export const useUIStore = create<UIState>()(
     setEditingWorkspace: (workspaceId: string | null) => {
       set((state) => {
         state.editingWorkspaceId = workspaceId;
+      });
+    },
+
+    setPositionEditWorkspace: (workspaceId: string | null) => {
+      set((state) => {
+        state.positionEditWorkspaceId = workspaceId;
       });
     },
 

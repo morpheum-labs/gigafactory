@@ -17,7 +17,7 @@ let mouseX = 400;
 let mouseY = 300;
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
-  const { selectedWorkspaceId, selectWorkspace, setActivePanel } = useUIStore();
+  const { selectedWorkspaceId, selectWorkspace, setActivePanel, positionEditWorkspaceId, setPositionEditWorkspace } = useUIStore();
   const { workspaces } = useWorkspacesStore();
   const { agents } = useAgentsStore();
 
@@ -105,9 +105,14 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
           }
           break;
 
-        // Escape = Deselect
+        // Escape = Exit position edit mode or deselect
         case 'escape':
-          selectWorkspace(null);
+          if (positionEditWorkspaceId) {
+            e.preventDefault();
+            setPositionEditWorkspace(null);
+          } else {
+            selectWorkspace(null);
+          }
           break;
 
         // 1-9 = Select workspace by index
@@ -152,7 +157,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
           break;
       }
     },
-    [selectedWorkspaceId, workspaces, agents, handlers, selectWorkspace, setActivePanel]
+    [selectedWorkspaceId, workspaces, agents, handlers, selectWorkspace, setActivePanel, positionEditWorkspaceId, setPositionEditWorkspace]
   );
 
   useEffect(() => {

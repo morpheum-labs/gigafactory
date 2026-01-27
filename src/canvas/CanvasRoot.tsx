@@ -8,6 +8,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CANVAS_COLORS, WORKSPACE_COLORS } from '../utils/colors';
 import { AGENT_EMOJIS, getRandomConfetti } from '../utils/emoji';
 import { playSound } from '../utils/sounds';
+import { MIN_WORKSPACE_SIZE } from '../types/workspace';
 
 interface Particle {
   text: Text;
@@ -17,8 +18,8 @@ interface Particle {
   alpha: number;
 }
 
-// Default workspace size for quick-create
-const QUICK_CREATE_SIZE = 280;
+// Default workspace size for quick-create (larger than minimum for better UX)
+const QUICK_CREATE_SIZE = Math.max(280, MIN_WORKSPACE_SIZE);
 
 export function CanvasRoot() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,9 +32,9 @@ export function CanvasRoot() {
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const drawing = useWorkspacesStore((s) => s.drawing);
-  const { startDrawing, updateDrawing, finishDrawing, addWorkspace, connectWorkspaces, renameWorkspace, removeWorkspace, setTaskTemplate, setAutoRun } = useWorkspacesStore();
+  const { startDrawing, updateDrawing, finishDrawing, addWorkspace, connectWorkspaces, renameWorkspace, removeWorkspace, setTaskTemplate, setAutoRun, updateWorkspacePosition } = useWorkspacesStore();
   const agents = useAgentsStore((s) => s.agents);
-  const { selectedWorkspaceId, selectWorkspace, showOutputModal, editingWorkspaceId, setEditingWorkspace, wiring, startWiring, updateWiring, endWiring } = useUIStore();
+  const { selectedWorkspaceId, selectWorkspace, showOutputModal, editingWorkspaceId, setEditingWorkspace, positionEditWorkspaceId, wiring, startWiring, updateWiring, endWiring } = useUIStore();
   const { startTask, stopTask } = useAgentCommands();
 
   // Track which workspace has task input focused
@@ -42,6 +43,9 @@ export function CanvasRoot() {
   const [editingName, setEditingName] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
   const taskInputRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Track dragging state for position editing
+  const [draggingWorkspace, setDraggingWorkspace] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
 
   // Quick-create workspace at position
   const quickCreateWorkspace = useCallback((x: number, y: number, autoConnect: boolean = true) => {
@@ -399,6 +403,23 @@ export function CanvasRoot() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
+      // Check if we're in position edit mode and clicking on the workspace being edited
+      if (positionEditWorkspaceId && e.button === 0) {
+        const clickedWorkspace = Object.values(workspaces).find(
+          (ws) => x >= ws.x && x <= ws.x + ws.width && y >= ws.y && y <= ws.y + ws.height && ws.id === positionEditWorkspaceId
+        );
+
+        if (clickedWorkspace) {
+          // Start dragging
+          const offsetX = x - clickedWorkspace.x;
+          const offsetY = y - clickedWorkspace.y;
+          setDraggingWorkspace({ id: clickedWorkspace.id, offsetX, offsetY });
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+
       // If we're wiring and click on empty space, create a workspace and connect to it!
       if (wiring.isWiring && wiring.fromWorkspaceId && e.button === 0) {
         const clickedWorkspace = Object.values(workspaces).find(
@@ -458,12 +479,12 @@ export function CanvasRoot() {
           playSound('select');
         }
         selectWorkspace(clickedWorkspace.id);
-      } else if (e.button === 0) {
-        // Left click on empty space - start drawing
+      } else if (e.button === 0 && !positionEditWorkspaceId) {
+        // Left click on empty space - start drawing (only if not in position edit mode)
         startDrawing(x, y);
       }
     },
-    [workspaces, startDrawing, selectWorkspace, selectedWorkspaceId, wiring, addWorkspace, connectWorkspaces, setAutoRun, endWiring]
+    [workspaces, startDrawing, selectWorkspace, selectedWorkspaceId, wiring, addWorkspace, connectWorkspaces, setAutoRun, endWiring, positionEditWorkspaceId]
   );
 
   // Right-click to quick-create
@@ -493,6 +514,12 @@ export function CanvasRoot() {
   );
 
   const handlePointerUp = useCallback(() => {
+    // Handle position dragging completion
+    if (draggingWorkspace) {
+      setDraggingWorkspace(null);
+      return;
+    }
+
     // Handle wiring completion
     if (wiring.isWiring) {
       // Find any workspace we're hovering over (not just the port - ANYWHERE on the workspace)
@@ -548,7 +575,7 @@ export function CanvasRoot() {
       setFocusedTaskInput(id);
       setTaskInputValue('');
     }
-  }, [finishDrawing, addWorkspace, selectWorkspace, wiring, workspaces, connectWorkspaces, endWiring, selectedWorkspaceId, setAutoRun]);
+  }, [finishDrawing, addWorkspace, selectWorkspace, wiring, workspaces, connectWorkspaces, endWiring, selectedWorkspaceId, setAutoRun, draggingWorkspace]);
 
   const handleCanvasPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -558,13 +585,21 @@ export function CanvasRoot() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
+      // Handle position dragging
+      if (draggingWorkspace) {
+        const newX = Math.max(0, x - draggingWorkspace.offsetX);
+        const newY = Math.max(0, y - draggingWorkspace.offsetY);
+        updateWorkspacePosition(draggingWorkspace.id, newX, newY);
+        return;
+      }
+
       if (wiring.isWiring) {
         updateWiring(x, y);
       } else if (drawing.isDrawing) {
         updateDrawing(x, y);
       }
     },
-    [drawing.isDrawing, updateDrawing, wiring.isWiring, updateWiring]
+    [drawing.isDrawing, updateDrawing, wiring.isWiring, updateWiring, draggingWorkspace, updateWorkspacePosition]
   );
 
   // Handle task submission
@@ -614,7 +649,9 @@ export function CanvasRoot() {
         };
         const status = getStatusInfo();
 
-        const borderColor = isSelected ? '#ffd700' :
+        const isPositionEditing = positionEditWorkspaceId === workspace.id;
+        const borderColor = isPositionEditing ? '#60a5fa' :
+          isSelected ? '#ffd700' :
           workspace.state === 'working' ? '#3182ce' :
           workspace.state === 'success' ? '#38a169' :
           workspace.state === 'error' ? '#e53e3e' :
@@ -635,7 +672,9 @@ export function CanvasRoot() {
             key={workspace.id}
             className={`absolute rounded-lg transition-all duration-200 group ${
               isSelected ? 'shadow-lg shadow-yellow-500/30 z-20' : 'z-10'
-            } ${workspace.state === 'success' ? 'shadow-lg shadow-emerald-500/30' : ''}`}
+            } ${workspace.state === 'success' ? 'shadow-lg shadow-emerald-500/30' : ''} ${
+              isPositionEditing ? 'ring-4 ring-blue-500/50 shadow-lg shadow-blue-500/30' : ''
+            }`}
             style={{
               left: workspace.x,
               top: workspace.y,
@@ -643,6 +682,33 @@ export function CanvasRoot() {
               height: workspace.height,
               border: `3px solid ${borderColor}`,
               backgroundColor: getBgColor(),
+              cursor: positionEditWorkspaceId === workspace.id ? 'move' : 'default',
+            }}
+            onPointerDown={(e) => {
+              // Don't select workspace if we're in the middle of wiring
+              if (wiring.isWiring) {
+                e.stopPropagation();
+                return;
+              }
+              // If in position edit mode and this is the workspace being edited, handle drag
+              if (positionEditWorkspaceId === workspace.id && e.button === 0) {
+                const rect = containerRef.current?.getBoundingClientRect();
+                if (rect) {
+                  const x = e.clientX - rect.left;
+                  const y = e.clientY - rect.top;
+                  const offsetX = x - workspace.x;
+                  const offsetY = y - workspace.y;
+                  setDraggingWorkspace({ id: workspace.id, offsetX, offsetY });
+                  (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }
+            }}
+            onPointerUp={(e) => {
+              if (draggingWorkspace && draggingWorkspace.id === workspace.id) {
+                (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+              }
             }}
           >
             {/* Workspace number badge */}
@@ -670,6 +736,41 @@ export function CanvasRoot() {
             {wiring.isWiring && wiring.fromWorkspaceId !== workspace.id && (
               <div className="absolute inset-0 rounded-lg border-4 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none animate-pulse" />
             )}
+            
+            {/* Position edit mode indicator and drag overlay */}
+            {isPositionEditing && (
+              <>
+                <div className="absolute inset-0 rounded-lg border-4 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none flex items-center justify-center z-30">
+                  <div className="bg-blue-600/90 text-white px-3 py-1 rounded text-xs font-bold">
+                    Drag to move
+                  </div>
+                </div>
+                {/* Transparent drag overlay - allows dragging from anywhere on the workspace */}
+                <div
+                  className="absolute inset-0 rounded-lg cursor-move z-20"
+                  onPointerDown={(e) => {
+                    if (e.button === 0) {
+                      const rect = containerRef.current?.getBoundingClientRect();
+                      if (rect) {
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        const offsetX = x - workspace.x;
+                        const offsetY = y - workspace.y;
+                        setDraggingWorkspace({ id: workspace.id, offsetX, offsetY });
+                        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
+                    }
+                  }}
+                  onPointerUp={(e) => {
+                    if (draggingWorkspace && draggingWorkspace.id === workspace.id) {
+                      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+                    }
+                  }}
+                />
+              </>
+            )}
 
             {/* INPUT PORT */}
             <div
@@ -693,7 +794,35 @@ export function CanvasRoot() {
                 }
               }}
               onPointerUp={(e) => {
+                e.stopPropagation();
                 (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+                // Complete connection if wiring is active
+                if (wiring.isWiring && wiring.fromWorkspaceId) {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    // Find any workspace we're hovering over
+                    const targetWorkspace = Object.values(workspaces).find((ws) => {
+                      if (ws.id === wiring.fromWorkspaceId) return false;
+                      return x >= ws.x && x <= ws.x + ws.width &&
+                             y >= ws.y && y <= ws.y + ws.height;
+                    });
+
+                    if (targetWorkspace) {
+                      if (wiring.fromType === 'output') {
+                        connectWorkspaces(wiring.fromWorkspaceId, targetWorkspace.id);
+                        setAutoRun(targetWorkspace.id, true);
+                      } else {
+                        connectWorkspaces(targetWorkspace.id, wiring.fromWorkspaceId);
+                        setAutoRun(wiring.fromWorkspaceId, true);
+                      }
+                      playSound('connect');
+                    }
+                    endWiring();
+                  }
+                }
               }}
             >
               <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all ${
@@ -728,8 +857,35 @@ export function CanvasRoot() {
                 }
               }}
               onPointerUp={(e) => {
+                e.stopPropagation();
                 (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-                // Let the canvas handle the actual connection
+                // Complete connection if wiring is active
+                if (wiring.isWiring && wiring.fromWorkspaceId) {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    // Find any workspace we're hovering over
+                    const targetWorkspace = Object.values(workspaces).find((ws) => {
+                      if (ws.id === wiring.fromWorkspaceId) return false;
+                      return x >= ws.x && x <= ws.x + ws.width &&
+                             y >= ws.y && y <= ws.y + ws.height;
+                    });
+
+                    if (targetWorkspace) {
+                      if (wiring.fromType === 'output') {
+                        connectWorkspaces(wiring.fromWorkspaceId, targetWorkspace.id);
+                        setAutoRun(targetWorkspace.id, true);
+                      } else {
+                        connectWorkspaces(targetWorkspace.id, wiring.fromWorkspaceId);
+                        setAutoRun(wiring.fromWorkspaceId, true);
+                      }
+                      playSound('connect');
+                    }
+                    endWiring();
+                  }
+                }
               }}
             >
               {/* Visual port indicator */}
@@ -946,6 +1102,72 @@ export function CanvasRoot() {
           </div>
         );
       })}
+
+      {/* Connection lines between workspaces - SVG overlay above cards */}
+      <svg
+        className="absolute inset-0 pointer-events-none"
+        style={{ zIndex: 25, overflow: 'visible' }}
+      >
+        <defs>
+          <marker id="arrowhead-connection" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
+          </marker>
+          <marker id="arrowhead-connection-active" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
+          </marker>
+          <filter id="glow-connection">
+            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+            <feMerge>
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+        {Object.values(workspaces).flatMap((fromWs) => {
+          return (fromWs.outputConnections || []).map((toId) => {
+            const toWs = workspaces[toId];
+            if (!toWs) return null;
+
+            const fromX = fromWs.x + fromWs.width;
+            const fromY = fromWs.y + fromWs.height / 2;
+            const toX = toWs.x;
+            const toY = toWs.y + toWs.height / 2;
+
+            const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
+            const isActive = fromWs.state === 'working' || toWs.state === 'working';
+
+            const pathD = `M ${fromX} ${fromY} C ${fromX + controlOffset} ${fromY}, ${toX - controlOffset} ${toY}, ${toX} ${toY}`;
+
+            return (
+              <g key={`${fromWs.id}-${toId}`}>
+                {/* Glow for active connections */}
+                {isActive && (
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="#60a5fa"
+                    strokeWidth="8"
+                    strokeOpacity="0.2"
+                    filter="url(#glow-connection)"
+                  />
+                )}
+                {/* Main connection line */}
+                <path
+                  d={pathD}
+                  fill="none"
+                  stroke="#60a5fa"
+                  strokeWidth={isActive ? "4" : "3"}
+                  strokeOpacity={isActive ? "1" : "0.6"}
+                  strokeLinecap="round"
+                  markerEnd="url(#arrowhead-connection)"
+                />
+                {/* Source dot */}
+                <circle cx={fromX} cy={fromY} r="6" fill="#60a5fa" />
+              </g>
+            );
+          }).filter(Boolean);
+        })}
+      </svg>
 
       {/* Wiring line - ALWAYS visible when wiring */}
       {wiring.isWiring && wiring.fromWorkspaceId && (() => {

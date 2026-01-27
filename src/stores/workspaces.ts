@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { nanoid } from 'nanoid';
 import type { Workspace, WorkspaceState, DrawingState, ModelId, CliType } from '../types/workspace';
-import { MIN_WORKSPACE_SIZE } from '../types/workspace';
+import { MIN_WORKSPACE_SIZE, getDefaultModelForCli, isModelValidForCli } from '../types/workspace';
 
 interface WorkspacesState {
   workspaces: Record<string, Workspace>;
@@ -28,6 +28,7 @@ interface WorkspacesState {
   disconnectWorkspaces: (fromId: string, toId: string) => void;
   getInputsForWorkspace: (workspaceId: string) => { id: string; output: string | null }[];
   getDownstreamWorkspaces: (workspaceId: string) => string[];
+  updateWorkspacePosition: (workspaceId: string, x: number, y: number) => void;
 
   startDrawing: (x: number, y: number) => void;
   updateDrawing: (x: number, y: number) => void;
@@ -50,6 +51,10 @@ export const useWorkspacesStore = create<WorkspacesState>()(
       const id = nanoid();
       workspaceCounter++;
       set((state) => {
+        // Ensure minimum size
+        const width = Math.max(workspace.width, MIN_WORKSPACE_SIZE);
+        const height = Math.max(workspace.height, MIN_WORKSPACE_SIZE);
+        
         state.workspaces[id] = {
           ...workspace,
           id,
@@ -59,6 +64,8 @@ export const useWorkspacesStore = create<WorkspacesState>()(
           model: workspace.model ?? 'claude-sonnet-4-20250514',
           cli: 'claude',
           mode: undefined,
+          width,
+          height,
           // Workflow defaults
           taskTemplate: null,
           lastOutput: null,
@@ -134,7 +141,17 @@ export const useWorkspacesStore = create<WorkspacesState>()(
     setModel: (workspaceId: string, model: ModelId) => {
       set((state) => {
         if (state.workspaces[workspaceId]) {
-          state.workspaces[workspaceId].model = model;
+          const workspace = state.workspaces[workspaceId];
+          const cli = workspace.cli ?? 'claude';
+          
+          // Validate that the model is valid for the current CLI
+          if (isModelValidForCli(model, cli)) {
+            workspace.model = model;
+          } else {
+            // If invalid, use default for the CLI
+            console.warn(`Model ${model} is not valid for CLI ${cli}, using default`);
+            workspace.model = getDefaultModelForCli(cli);
+          }
         }
       });
     },
@@ -142,7 +159,14 @@ export const useWorkspacesStore = create<WorkspacesState>()(
     setCli: (workspaceId: string, cli: CliType) => {
       set((state) => {
         if (state.workspaces[workspaceId]) {
-          state.workspaces[workspaceId].cli = cli;
+          const workspace = state.workspaces[workspaceId];
+          workspace.cli = cli;
+          
+          // Auto-update model to appropriate default when switching CLI
+          const currentModel = workspace.model;
+          if (!isModelValidForCli(currentModel, cli)) {
+            workspace.model = getDefaultModelForCli(cli);
+          }
         }
       });
     },
@@ -224,6 +248,15 @@ export const useWorkspacesStore = create<WorkspacesState>()(
       const { workspaces } = get();
       const workspace = workspaces[workspaceId];
       return workspace?.outputConnections ?? [];
+    },
+
+    updateWorkspacePosition: (workspaceId: string, x: number, y: number) => {
+      set((state) => {
+        if (state.workspaces[workspaceId]) {
+          state.workspaces[workspaceId].x = Math.max(0, x);
+          state.workspaces[workspaceId].y = Math.max(0, y);
+        }
+      });
     },
 
     startDrawing: (x: number, y: number) => {
