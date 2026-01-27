@@ -4,7 +4,7 @@ use tokio::fs;
 use tokio::process::Command;
 use tauri::{AppHandle, Emitter, State};
 
-use giga_command_center_core::{AgentManager, AgentConfig, AgentEvent, AgentId, StopReason, SkillInfo, SkillDetail};
+use giga_command_center_core::{AgentManager, AgentConfig, AgentEvent, AgentId, StopReason, SkillInfo, SkillDetail, AppConfig};
 
 #[tauri::command]
 pub async fn start_agent(
@@ -138,8 +138,8 @@ pub async fn check_deepseek_cli_available() -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn list_skills() -> Result<Vec<SkillInfo>, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let skills_dir = home.join(".claude").join("skills");
+    let config = AppConfig::load().map_err(|e| format!("Failed to load config: {}", e))?;
+    let skills_dir = config.get_skills_dir().map_err(|e| format!("Failed to get skills directory: {}", e))?;
 
     if !skills_dir.exists() {
         return Ok(vec![]);
@@ -159,11 +159,23 @@ pub async fn list_skills() -> Result<Vec<SkillInfo>, String> {
         })?;
         
         if metadata.is_dir() {
+            // Handle subdirectory with SKILL.md inside
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
                 if let Ok(content) = fs::read_to_string(&skill_md).await {
                     if let Some(info) = parse_skill_frontmatter(&content, &path) {
                         skills.push(info);
+                    }
+                }
+            }
+        } else if metadata.is_file() {
+            // Handle .md files directly in the skills directory
+            if let Some(ext) = path.extension() {
+                if ext == "md" || ext == "MD" {
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Some(info) = parse_skill_frontmatter(&content, &path) {
+                            skills.push(info);
+                        }
                     }
                 }
             }
@@ -175,18 +187,33 @@ pub async fn list_skills() -> Result<Vec<SkillInfo>, String> {
 
 #[tauri::command]
 pub async fn get_skill(skill_name: String) -> Result<SkillDetail, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let skill_path = home.join(".claude").join("skills").join(&skill_name);
+    let config = AppConfig::load().map_err(|e| format!("Failed to load config: {}", e))?;
+    let skills_dir = config.get_skills_dir().map_err(|e| format!("Failed to get skills directory: {}", e))?;
+    
+    // Try directory with SKILL.md first
+    let skill_path = skills_dir.join(&skill_name);
     let skill_md = skill_path.join("SKILL.md");
-
-    if !skill_md.exists() {
-        return Err(format!("Skill '{}' not found", skill_name));
-    }
-
-    let content = fs::read_to_string(&skill_md).await.map_err(|e| {
-        format!("Failed to read skill file '{}': {}", skill_name, e)
-    })?;
-    let info = parse_skill_frontmatter(&content, &skill_path)
+    
+    // If not found, try direct .md file
+    let (content, final_path) = if skill_md.exists() {
+        let content = fs::read_to_string(&skill_md).await.map_err(|e| {
+            format!("Failed to read skill file '{}': {}", skill_name, e)
+        })?;
+        (content, skill_path)
+    } else {
+        // Try as direct .md file
+        let md_file = skills_dir.join(format!("{}.md", skill_name));
+        if !md_file.exists() {
+            return Err(format!("Skill '{}' not found", skill_name));
+        }
+        let content = fs::read_to_string(&md_file).await.map_err(|e| {
+            format!("Failed to read skill file '{}': {}", skill_name, e)
+        })?;
+        // Pass the file path itself, not the parent directory
+        (content, md_file)
+    };
+    
+    let info = parse_skill_frontmatter(&content, &final_path)
         .ok_or_else(|| format!("Failed to parse skill frontmatter for '{}'", skill_name))?;
 
     // Extract content after frontmatter
@@ -195,20 +222,25 @@ pub async fn get_skill(skill_name: String) -> Result<SkillDetail, String> {
     Ok(SkillDetail {
         info,
         markdown,
-        path: skill_path.to_string_lossy().to_string(),
+        path: final_path.to_string_lossy().to_string(),
     })
 }
 
 fn parse_skill_frontmatter(content: &str, path: &PathBuf) -> Option<SkillInfo> {
     let lines: Vec<&str> = content.lines().collect();
 
+    // Get base name, stripping .md extension if present
+    let mut base_name = path.file_name()?.to_string_lossy().to_string();
+    if base_name.ends_with(".md") || base_name.ends_with(".MD") {
+        base_name = base_name[..base_name.len() - 3].to_string();
+    }
+
     // Look for YAML frontmatter
     if lines.first()? != &"---" {
-        // No frontmatter, try to extract from directory name
-        let name = path.file_name()?.to_string_lossy().to_string();
+        // No frontmatter, use base name
         return Some(SkillInfo {
-            name: name.clone(),
-            description: format!("Custom skill: {}", name),
+            name: base_name.clone(),
+            description: format!("Custom skill: {}", base_name),
         });
     }
 
@@ -223,7 +255,7 @@ fn parse_skill_frontmatter(content: &str, path: &PathBuf) -> Option<SkillInfo> {
     let end_index = end_index?;
     let frontmatter: Vec<&str> = lines[1..end_index].to_vec();
 
-    let mut name = path.file_name()?.to_string_lossy().to_string();
+    let mut name = base_name;
     let mut description = String::new();
 
     for line in frontmatter {
@@ -257,4 +289,15 @@ fn extract_markdown_content(content: &str) -> String {
     } else {
         content.to_string()
     }
+}
+
+#[tauri::command]
+pub async fn get_config() -> Result<AppConfig, String> {
+    AppConfig::load()
+}
+
+#[tauri::command]
+pub async fn set_config(config: AppConfig) -> Result<AppConfig, String> {
+    config.save()?;
+    Ok(config)
 }

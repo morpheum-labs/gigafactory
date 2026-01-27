@@ -45,7 +45,7 @@ async fn main() {
                 }
             }
         })
-        .unwrap_or_else(|_| PathBuf::from("dist"));
+        .unwrap_or_else(|_: std::env::VarError| PathBuf::from("dist"));
 
     tracing::info!("Serving static files from: {}", static_dir.display());
 
@@ -59,6 +59,8 @@ async fn main() {
         .route("/api/cli/check/:cli", get(routes::check_cli_available))
         .route("/api/skills", get(routes::list_skills))
         .route("/api/skills/:name", get(routes::get_skill))
+        .route("/api/config", get(routes::get_config))
+        .route("/api/config", post(routes::set_config))
         // WebSocket route
         .route("/ws", get(websocket::websocket_handler))
         // Static file serving (for frontend)

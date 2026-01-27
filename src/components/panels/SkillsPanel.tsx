@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useSkillsStore } from '../../stores/skills';
+import { useConfigStore } from '../../stores/config';
 import { Button } from '../common/Button';
 
 interface SkillsPanelProps {
@@ -8,6 +9,11 @@ interface SkillsPanelProps {
 
 export function SkillsPanel({ onSelectSkill }: SkillsPanelProps) {
   const { skills, selectedSkill, loading, error, loadSkills, selectSkill, clearSelection } = useSkillsStore();
+  const { config, loadConfig } = useConfigStore();
+
+  useEffect(() => {
+    loadConfig();
+  }, [loadConfig]);
 
   useEffect(() => {
     loadSkills();
@@ -37,9 +43,12 @@ export function SkillsPanel({ onSelectSkill }: SkillsPanelProps) {
       <div className="p-5 text-center text-gray-500">
         <p className="text-3xl mb-3">🔧</p>
         <p className="text-base">No skills found</p>
-        <p className="text-sm mt-2">
-          Skills are stored in ~/.claude/skills/
+        <p className="text-sm mt-2 mb-4">
+          Skills are stored in {config?.skills_path || '~/.claude/skills/'}
         </p>
+        <Button size="sm" onClick={() => loadSkills()} disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </Button>
       </div>
     );
   }

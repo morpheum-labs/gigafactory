@@ -7,6 +7,7 @@
     "dev": "vite --mode web",
     "dev:web": "vite --mode web",
     "dev:tauri": "vite --mode tauri",
+    "dev:server": "cargo run -p giga-command-center-server",
     "build": "bun run build:web",
     "build:web": "bunx tsc --noEmit && vite build --mode web",
     "build:web:skip-check": "vite build --mode web",

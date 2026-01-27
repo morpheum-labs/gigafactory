@@ -25,6 +25,8 @@ pub fn run() {
             check_deepseek_cli_available,
             list_skills,
             get_skill,
+            get_config,
+            set_config,
         ])
         .on_window_event({
             let manager = manager.clone();

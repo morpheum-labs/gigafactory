@@ -23,7 +23,7 @@ async fn handle_socket(
     let mut rx = event_tx.subscribe();
 
     // Spawn task to send events to WebSocket
-    let send_task = tokio::spawn(async move {
+    let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             if sender.send(axum::extract::ws::Message::Text(msg)).await.is_err() {
                 break;
@@ -32,7 +32,7 @@ async fn handle_socket(
     });
 
     // Spawn task to receive messages from WebSocket
-    let recv_task = tokio::spawn(async move {
+    let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let axum::extract::ws::Message::Close(_) = msg {
                 break;
@@ -42,11 +42,11 @@ async fn handle_socket(
 
     // Wait for either task to complete
     tokio::select! {
-        _ = send_task => {
+        _ = &mut send_task => {
             recv_task.abort();
             let _ = recv_task.await;
         },
-        _ = recv_task => {
+        _ = &mut recv_task => {
             send_task.abort();
             let _ = send_task.await;
         },

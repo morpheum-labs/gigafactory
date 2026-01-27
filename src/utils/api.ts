@@ -320,6 +320,48 @@ export const api = {
   },
 
   /**
+   * Get application configuration
+   */
+  async getConfig(): Promise<{ skills_path: string }> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<{ skills_path: string }>('get_config');
+    } else {
+      const response = await fetch(`${getApiBaseUrl()}/api/config`);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to get config: ${response.status} ${errorText}`);
+      }
+      return await response.json();
+    }
+  },
+
+  /**
+   * Set application configuration
+   */
+  async setConfig(config: { skills_path: string }): Promise<{ skills_path: string }> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<{ skills_path: string }>('set_config', { config });
+    } else {
+      const response = await fetch(`${getApiBaseUrl()}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to set config: ${response.status} ${errorText}`);
+      }
+      return await response.json();
+    }
+  },
+
+  /**
    * Listen to agent events
    */
   async listenToEvents(callback: (event: AgentEvent) => void): Promise<() => void> {

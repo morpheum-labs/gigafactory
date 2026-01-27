@@ -9,6 +9,7 @@ use giga_command_center_core::{AgentManager, AgentConfig, AgentId, SkillInfo, Sk
 use tokio::process::Command;
 use tokio::fs;
 use std::path::PathBuf;
+use giga_command_center_core::AppConfig;
 
 pub async fn start_agent(
     Extension(manager): Extension<Arc<AgentManager>>,
@@ -85,8 +86,15 @@ pub async fn check_cli_available(
 }
 
 pub async fn list_skills() -> Result<Json<Vec<SkillInfo>>, StatusCode> {
-    let home = dirs::home_dir().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let skills_dir = home.join(".claude").join("skills");
+    let config = AppConfig::load().map_err(|e| {
+        tracing::error!("Failed to load config: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    
+    let skills_dir = config.get_skills_dir().map_err(|e| {
+        tracing::error!("Failed to get skills directory: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     if !skills_dir.exists() {
         return Ok(Json(vec![]));
@@ -109,11 +117,23 @@ pub async fn list_skills() -> Result<Json<Vec<SkillInfo>>, StatusCode> {
         })?;
         
         if metadata.is_dir() {
+            // Handle subdirectory with SKILL.md inside
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
                 if let Ok(content) = fs::read_to_string(&skill_md).await {
                     if let Some(info) = parse_skill_frontmatter(&content, &path) {
                         skills.push(info);
+                    }
+                }
+            }
+        } else if metadata.is_file() {
+            // Handle .md files directly in the skills directory
+            if let Some(ext) = path.extension() {
+                if ext == "md" || ext == "MD" {
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Some(info) = parse_skill_frontmatter(&content, &path) {
+                            skills.push(info);
+                        }
                     }
                 }
             }
@@ -126,19 +146,41 @@ pub async fn list_skills() -> Result<Json<Vec<SkillInfo>>, StatusCode> {
 pub async fn get_skill(
     Path(skill_name): Path<String>,
 ) -> Result<Json<SkillDetail>, StatusCode> {
-    let home = dirs::home_dir().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let skill_path = home.join(".claude").join("skills").join(&skill_name);
-    let skill_md = skill_path.join("SKILL.md");
-
-    if !skill_md.exists() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let content = fs::read_to_string(&skill_md).await.map_err(|e| {
-        tracing::error!("Failed to read skill file: {}", e);
+    let config = AppConfig::load().map_err(|e| {
+        tracing::error!("Failed to load config: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let info = parse_skill_frontmatter(&content, &skill_path)
+    
+    let skills_dir = config.get_skills_dir().map_err(|e| {
+        tracing::error!("Failed to get skills directory: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    
+    // Try directory with SKILL.md first
+    let skill_path = skills_dir.join(&skill_name);
+    let skill_md = skill_path.join("SKILL.md");
+    
+    // If not found, try direct .md file
+    let (content, final_path) = if skill_md.exists() {
+        let content = fs::read_to_string(&skill_md).await.map_err(|e| {
+            tracing::error!("Failed to read skill file: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        (content, skill_path)
+    } else {
+        // Try as direct .md file
+        let md_file = skills_dir.join(format!("{}.md", skill_name));
+        if !md_file.exists() {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        let content = fs::read_to_string(&md_file).await.map_err(|e| {
+            tracing::error!("Failed to read skill file: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        // Pass the file path itself, not the parent directory
+        (content, md_file)
+    };
+    let info = parse_skill_frontmatter(&content, &final_path)
         .ok_or_else(|| {
             tracing::error!("Failed to parse skill frontmatter for: {}", skill_name);
             StatusCode::INTERNAL_SERVER_ERROR
@@ -149,18 +191,23 @@ pub async fn get_skill(
     Ok(Json(SkillDetail {
         info,
         markdown,
-        path: skill_path.to_string_lossy().to_string(),
+        path: final_path.to_string_lossy().to_string(),
     }))
 }
 
 fn parse_skill_frontmatter(content: &str, path: &PathBuf) -> Option<SkillInfo> {
     let lines: Vec<&str> = content.lines().collect();
 
+    // Get base name, stripping .md extension if present
+    let mut base_name = path.file_name()?.to_string_lossy().to_string();
+    if base_name.ends_with(".md") || base_name.ends_with(".MD") {
+        base_name = base_name[..base_name.len() - 3].to_string();
+    }
+
     if lines.first()? != &"---" {
-        let name = path.file_name()?.to_string_lossy().to_string();
         return Some(SkillInfo {
-            name: name.clone(),
-            description: format!("Custom skill: {}", name),
+            name: base_name.clone(),
+            description: format!("Custom skill: {}", base_name),
         });
     }
 
@@ -175,7 +222,7 @@ fn parse_skill_frontmatter(content: &str, path: &PathBuf) -> Option<SkillInfo> {
     let end_index = end_index?;
     let frontmatter: Vec<&str> = lines[1..end_index].to_vec();
 
-    let mut name = path.file_name()?.to_string_lossy().to_string();
+    let mut name = base_name;
     let mut description = String::new();
 
     for line in frontmatter {
@@ -209,4 +256,22 @@ fn extract_markdown_content(content: &str) -> String {
     } else {
         content.to_string()
     }
+}
+
+pub async fn get_config() -> Result<Json<AppConfig>, StatusCode> {
+    let config = AppConfig::load().map_err(|e| {
+        tracing::error!("Failed to load config: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(config))
+}
+
+pub async fn set_config(
+    Json(config): Json<AppConfig>,
+) -> Result<Json<AppConfig>, StatusCode> {
+    config.save().map_err(|e| {
+        tracing::error!("Failed to save config: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(config))
 }

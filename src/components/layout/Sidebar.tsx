@@ -52,7 +52,7 @@ export function Sidebar() {
     <div className="w-96 bg-canvas-surface border-l border-canvas-border flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-canvas-border">
-        <h2 className="text-base font-semibold text-gray-200">Claude Command Center</h2>
+        <h2 className="text-base font-semibold text-gray-200">Giga Factory Center</h2>
         <button
           onClick={toggleSidebar}
           className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
