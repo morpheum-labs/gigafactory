@@ -6,6 +6,7 @@ import { Input } from './common/Input';
 export function SetupPage() {
   const { config, loading, error, saveConfig, loadConfig } = useConfigStore();
   const [skillsPath, setSkillsPath] = useState('');
+  const [workspaceDirectory, setWorkspaceDirectory] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -16,9 +17,11 @@ export function SetupPage() {
   useEffect(() => {
     if (config) {
       setSkillsPath(config.skills_path);
+      setWorkspaceDirectory(config.workspace_directory || '');
     } else {
-      // Default path if no config
+      // Default paths if no config
       setSkillsPath('~/.claude/skills');
+      setWorkspaceDirectory('');
     }
   }, [config]);
 
@@ -28,7 +31,10 @@ export function SetupPage() {
     setSaveError(null);
 
     try {
-      await saveConfig({ skills_path: skillsPath });
+      await saveConfig({ 
+        skills_path: skillsPath,
+        workspace_directory: workspaceDirectory.trim() || null,
+      });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save configuration');
       setSaving(false);
@@ -77,6 +83,24 @@ export function SetupPage() {
               </p>
             </div>
 
+            <div>
+              <label htmlFor="workspace-directory" className="block text-sm font-medium text-gray-300 mb-2">
+                Workspace Directory Path
+              </label>
+              <Input
+                id="workspace-directory"
+                type="text"
+                value={workspaceDirectory}
+                onChange={(e) => setWorkspaceDirectory(e.target.value)}
+                placeholder="~/projects/my-workspace"
+                required
+                className="w-full"
+              />
+              <p className="mt-2 text-sm text-gray-500">
+                Enter the root directory path for your workspace. All file operations will be scoped to this directory. You can use <code className="bg-gray-800 px-1 rounded">~</code> for your home directory.
+              </p>
+            </div>
+
             {error && (
               <div className="bg-red-900/30 border border-red-700 rounded p-3 text-red-400 text-sm">
                 {error}
@@ -92,7 +116,7 @@ export function SetupPage() {
             <div className="flex justify-end gap-3">
               <Button
                 type="submit"
-                disabled={saving || !skillsPath.trim()}
+                disabled={saving || !skillsPath.trim() || !workspaceDirectory.trim()}
                 variant="primary"
               >
                 {saving ? 'Saving...' : 'Save & Continue'}

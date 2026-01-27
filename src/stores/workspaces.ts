@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
 import type { Workspace, WorkspaceState, DrawingState, ModelId, CliType } from '../types/workspace';
 import { MIN_WORKSPACE_SIZE, getDefaultModelForCli, isModelValidForCli } from '../types/workspace';
@@ -39,13 +40,14 @@ interface WorkspacesState {
 let workspaceCounter = 0;
 
 export const useWorkspacesStore = create<WorkspacesState>()(
-  immer((set, get) => ({
-    workspaces: {},
-    drawing: {
-      isDrawing: false,
-      start: null,
-      current: null,
-    },
+  persist(
+    immer((set, get) => ({
+      workspaces: {},
+      drawing: {
+        isDrawing: false,
+        start: null,
+        current: null,
+      },
 
     addWorkspace: (workspace) => {
       const id = nanoid();
@@ -253,8 +255,8 @@ export const useWorkspacesStore = create<WorkspacesState>()(
     updateWorkspacePosition: (workspaceId: string, x: number, y: number) => {
       set((state) => {
         if (state.workspaces[workspaceId]) {
-          state.workspaces[workspaceId].x = Math.max(0, x);
-          state.workspaces[workspaceId].y = Math.max(0, y);
+          state.workspaces[workspaceId].x = x;
+          state.workspaces[workspaceId].y = y;
         }
       });
     },
@@ -302,10 +304,18 @@ export const useWorkspacesStore = create<WorkspacesState>()(
       return { x, y, width, height };
     },
 
-    cancelDrawing: () => {
-      set((state) => {
-        state.drawing = { isDrawing: false, start: null, current: null };
-      });
-    },
-  }))
+      cancelDrawing: () => {
+        set((state) => {
+          state.drawing = { isDrawing: false, start: null, current: null };
+        });
+      },
+    })),
+    {
+      name: 'gigafactory-workspaces', // localStorage key
+      // Only persist workspaces, not drawing state
+      partialize: (state) => ({
+        workspaces: state.workspaces,
+      }),
+    }
+  )
 );

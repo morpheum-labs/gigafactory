@@ -1,5 +1,6 @@
 mod routes;
 mod websocket;
+mod capabilities;
 
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -18,6 +19,13 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
+    // Load capabilities
+    let capabilities = Arc::new(
+        capabilities::CapabilityManager::load()
+            .await
+            .expect("Failed to load capabilities")
+    );
+    
     // Create shared state
     let manager = Arc::new(AgentManager::new());
     
@@ -70,7 +78,8 @@ async fn main() {
         .layer(CorsLayer::permissive())
         // Add shared state
         .layer(Extension(manager))
-        .layer(Extension(event_tx));
+        .layer(Extension(event_tx))
+        .layer(Extension(capabilities));
 
     // Start server
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

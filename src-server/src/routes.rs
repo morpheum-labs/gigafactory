@@ -6,18 +6,27 @@ use axum::{
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use giga_command_center_core::{AgentManager, AgentConfig, AgentId, SkillInfo, SkillDetail, AgentEvent};
+use giga_command_center_core::{AgentManager, AgentConfig, AgentId, SkillInfo, SkillDetail, AgentEvent, CliType};
 use tokio::process::Command;
 use tokio::fs;
 use std::path::PathBuf;
 use giga_command_center_core::AppConfig;
 use futures_util::future::join_all;
+use crate::capabilities::CapabilityManager;
 
 pub async fn start_agent(
     Extension(manager): Extension<Arc<AgentManager>>,
     Extension(event_tx): Extension<Arc<broadcast::Sender<String>>>,
+    Extension(capabilities): Extension<Arc<CapabilityManager>>,
     Json(config): Json<AgentConfig>,
 ) -> Result<Json<AgentId>, StatusCode> {
+    // Validate that the requested CLI type is allowed by capabilities
+    let cli_type = config.cli.as_ref().unwrap_or(&CliType::Claude);
+    if let Err(e) = capabilities.validate_cli_type(cli_type).await {
+        tracing::warn!("Capability validation failed: {}", e);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     // Create event emitter that sends to WebSocket channel
     let emit_event = move |event: AgentEvent| {
         if let Ok(json) = serde_json::to_string(&event) {

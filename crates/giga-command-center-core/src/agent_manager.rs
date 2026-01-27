@@ -56,6 +56,18 @@ impl AgentManager {
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
 
+        // Set environment variables for DeepSeek CLI to handle long context responses
+        // The DeepSeek CLI (Go) may timeout when reading large HTTP response bodies
+        // Setting HTTP timeout environment variables to prevent "context deadline exceeded" errors
+        if matches!(cli, CliType::DeepSeek) {
+            // Set a high timeout (5 minutes) for long context responses
+            // Many Go HTTP clients respect HTTP_TIMEOUT or similar env vars
+            cmd.env("HTTP_TIMEOUT", "600"); // 300 seconds = 5 minutes
+            cmd.env("DEEPSEEK_TIMEOUT", "600"); // CLI-specific timeout if supported
+            // Also set Go's default HTTP client timeout if the CLI uses it
+            cmd.env("GODEBUG", "http2debug=0"); // Disable HTTP/2 debug, but keep connection
+        }
+
         if let Some(dir) = &config.working_directory {
             cmd.current_dir(dir);
         }

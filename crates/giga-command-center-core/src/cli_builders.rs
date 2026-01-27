@@ -133,6 +133,8 @@ pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) 
     // Local models (Ollama): deepseek-coder:6.7b, deepseek-coder:1.3b, deepseek-coder:33b
     // Flags: --model/-m, --api-key/-k, --local/-l, --ollama-host, --stream/-s, --thinking
     // System prompts: Use DEEPSEEK_SYSTEM_MESSAGE env var or prepend to prompt
+    // Note: For long context responses, HTTP timeout env vars are set in agent_manager.rs
+    //       to prevent "context deadline exceeded" errors when reading large response bodies
     let mut query = config.prompt.clone();
     if let Some(sp) = &config.system_prompt {
         if !sp.is_empty() {

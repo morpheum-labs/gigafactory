@@ -1,0 +1,40 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for Giga Factory Command Center Web Server",
+  "permissions": {
+    "shell:allow-spawn": true,
+    "shell:allow-kill": true
+  },
+  "allowed_commands": [
+    {
+      "name": "claude",
+      "cmd": "claude",
+      "args": true
+    },
+    {
+      "name": "agent",
+      "cmd": "agent",
+      "args": true
+    },
+    {
+      "name": "kilo",
+      "cmd": "kilo",
+      "args": true
+    },
+    {
+      "name": "gemini",
+      "cmd": "gemini",
+      "args": true
+    },
+    {
+      "name": "grok",
+      "cmd": "grok",
+      "args": true
+    },
+    {
+      "name": "deepseek-cli",
+      "cmd": "deepseek-cli",
+      "args": true
+    }
+  ]
+}

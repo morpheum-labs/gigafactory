@@ -6,6 +6,8 @@ use dirs;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub skills_path: String,
+    #[serde(default)]
+    pub workspace_directory: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -16,6 +18,7 @@ impl Default for AppConfig {
         
         AppConfig {
             skills_path: default_path,
+            workspace_directory: None,
         }
     }
 }
@@ -78,5 +81,24 @@ impl AppConfig {
         };
         
         Ok(expanded_path)
+    }
+
+    pub fn get_workspace_dir(&self) -> Result<Option<PathBuf>, String> {
+        let Some(path_str) = &self.workspace_directory else {
+            return Ok(None);
+        };
+        
+        // Expand ~ to home directory
+        let expanded_path = if path_str.starts_with("~/") {
+            let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+            home.join(&path_str[2..])
+        } else if path_str.starts_with('~') {
+            let home = dirs::home_dir().ok_or("Failed to get home directory")?;
+            home.join(&path_str[1..])
+        } else {
+            PathBuf::from(path_str)
+        };
+        
+        Ok(Some(expanded_path))
     }
 }

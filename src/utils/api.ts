@@ -340,12 +340,12 @@ export const api = {
   /**
    * Get application configuration
    */
-  async getConfig(): Promise<{ skills_path: string }> {
+  async getConfig(): Promise<{ skills_path: string; workspace_directory?: string | null }> {
     if (isTauri) {
       if (!tauriInvoke) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      return await tauriInvoke<{ skills_path: string }>('get_config');
+      return await tauriInvoke<{ skills_path: string; workspace_directory?: string | null }>('get_config');
     } else {
       const response = await fetch(`${getApiBaseUrl()}/api/config`);
       if (!response.ok) {
@@ -359,12 +359,12 @@ export const api = {
   /**
    * Set application configuration
    */
-  async setConfig(config: { skills_path: string }): Promise<{ skills_path: string }> {
+  async setConfig(config: { skills_path: string; workspace_directory?: string | null }): Promise<{ skills_path: string; workspace_directory?: string | null }> {
     if (isTauri) {
       if (!tauriInvoke) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      return await tauriInvoke<{ skills_path: string }>('set_config', { config });
+      return await tauriInvoke<{ skills_path: string; workspace_directory?: string | null }>('set_config', { config });
     } else {
       const response = await fetch(`${getApiBaseUrl()}/api/config`, {
         method: 'POST',

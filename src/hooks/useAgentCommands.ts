@@ -3,6 +3,7 @@ import { api } from '../utils/api';
 import { useAgentsStore } from '../stores/agents';
 import { useWorkspacesStore } from '../stores/workspaces';
 import { useUIStore } from '../stores/ui';
+import { useConfigStore } from '../stores/config';
 import type { AgentConfig } from '../types/agent';
 
 export function useAgentCommands() {
@@ -60,6 +61,10 @@ export function useAgentCommands() {
         const { workspaces } = useWorkspacesStore.getState();
         const workspace = workspaces[workspaceId];
 
+        // Get configured workspace directory from app config
+        const { config: appConfig } = useConfigStore.getState();
+        const workspaceDirectory = appConfig?.workspace_directory?.trim() || undefined;
+
         // Build the prompt with workflow inputs if needed
         const finalPrompt = options?.useWorkflowInputs !== false
           ? buildWorkflowPrompt(workspaceId, prompt)
@@ -68,18 +73,19 @@ export function useAgentCommands() {
         updateWorkspaceState(workspaceId, 'working');
         setStatusMessage('Starting task...');
 
-        const config: AgentConfig = {
+        const agentConfig: AgentConfig = {
           workspaceId,
           prompt: finalPrompt,
           cli: options?.cli ?? workspace?.cli,
           mode: options?.mode ?? workspace?.mode,
           allowedTools: options?.allowedTools,
+          workingDirectory: workspaceDirectory,
           systemPrompt: workspace?.systemPrompt || undefined,
           model: workspace?.model || undefined,
         };
 
         // The backend returns the agent ID it creates
-        const backendAgentId = await api.startAgent(config);
+        const backendAgentId = await api.startAgent(agentConfig);
 
         // Create the agent in our store with the backend's ID
         const { agents } = useAgentsStore.getState();

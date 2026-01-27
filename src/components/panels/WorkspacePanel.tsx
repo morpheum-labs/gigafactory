@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useWorkspacesStore } from '../../stores/workspaces';
 import { useAgentsStore } from '../../stores/agents';
 import { useUIStore } from '../../stores/ui';
+import { useAvailableAndEnabledClis } from '../../stores/settings';
 import { useAgentCommands } from '../../hooks/useAgentCommands';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
@@ -10,6 +11,15 @@ import { ProgressBar } from '../common/ProgressBar';
 import { WORKSPACE_EMOJIS } from '../../utils/emoji';
 import { AGENT_EMOJIS } from '../../utils/emoji';
 import { AVAILABLE_MODELS, ModelId, CliType } from '../../types/workspace';
+
+const CLI_LABELS: Record<CliType, string> = {
+  claude: 'Claude (claude)',
+  cursor: 'Cursor Agent (agent)',
+  kilo: 'Kilo Code (kilo)',
+  gemini: 'Gemini CLI (gemini)',
+  grok: 'Grok CLI (grok)',
+  deepseek: 'DeepSeek CLI (deepseek)',
+};
 
 const WORKFLOW_SECTION_STYLE = "mb-5 p-4 bg-gray-800/50 rounded-lg border border-gray-700";
 
@@ -29,6 +39,7 @@ export function WorkspacePanel() {
   } = useWorkspacesStore();
   const agents = useAgentsStore((s) => s.agents);
   const { deleteWorkspace } = useAgentCommands();
+  const availableAndEnabledClis = useAvailableAndEnabledClis();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
@@ -39,6 +50,11 @@ export function WorkspacePanel() {
 
   const workspace = selectedWorkspaceId ? workspaces[selectedWorkspaceId] : null;
   const agent = workspace?.agentId ? agents[workspace.agentId] : null;
+  // Always include the current workspace CLI even if not available/enabled, so user can see what's selected
+  const currentCli = workspace?.cli ?? 'claude';
+  const clisToShow = availableAndEnabledClis.includes(currentCli as CliType)
+    ? availableAndEnabledClis
+    : [...availableAndEnabledClis, currentCli as CliType];
 
   if (!workspace) {
     return (
@@ -146,13 +162,29 @@ export function WorkspacePanel() {
           onChange={(e) => setCli(workspace.id, e.target.value as CliType)}
           className="w-full bg-gray-800 border border-gray-700 rounded px-4 py-3 text-base text-white focus:border-blue-500 focus:outline-none"
         >
-          <option value="claude">Claude (claude)</option>
-          <option value="cursor">Cursor Agent (agent)</option>
-          <option value="kilo">Kilo Code (kilo)</option>
-          <option value="gemini">Gemini CLI (gemini)</option>
-          <option value="grok">Grok CLI (grok)</option>
-          <option value="deepseek">DeepSeek CLI (deepseek)</option>
+          {clisToShow.length > 0 ? (
+            clisToShow.map((cli: CliType) => {
+              const isAvailableAndEnabled = availableAndEnabledClis.includes(cli);
+              return (
+                <option key={cli} value={cli} disabled={!isAvailableAndEnabled}>
+                  {CLI_LABELS[cli]}{!isAvailableAndEnabled ? ' (unavailable or disabled)' : ''}
+                </option>
+              );
+            })
+          ) : (
+            <option value="claude">Claude (claude)</option>
+          )}
         </select>
+        {!availableAndEnabledClis.includes(currentCli as CliType) && availableAndEnabledClis.length > 0 && (
+          <p className="mt-2 text-xs text-yellow-400">
+            Current CLI is unavailable or disabled. Please select an available and enabled CLI from Settings.
+          </p>
+        )}
+        {availableAndEnabledClis.length === 0 && (
+          <p className="mt-2 text-xs text-yellow-400">
+            No agents available and enabled. Check CLI availability and enable agents in Settings.
+          </p>
+        )}
       </div>
 
       {(workspace.cli ?? 'claude') === 'cursor' && (

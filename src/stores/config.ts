@@ -4,6 +4,7 @@ import { api } from '../utils/api';
 
 export interface AppConfig {
   skills_path: string;
+  workspace_directory?: string | null;
 }
 
 interface ConfigState {

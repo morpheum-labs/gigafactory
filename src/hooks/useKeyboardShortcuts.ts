@@ -155,6 +155,18 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
             setActivePanel('logs');
           }
           break;
+
+        // M = Toggle position edit mode for selected workspace
+        case 'm':
+          if (selectedWorkspaceId && !e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            if (positionEditWorkspaceId === selectedWorkspaceId) {
+              setPositionEditWorkspace(null);
+            } else {
+              setPositionEditWorkspace(selectedWorkspaceId);
+            }
+          }
+          break;
       }
     },
     [selectedWorkspaceId, workspaces, agents, handlers, selectWorkspace, setActivePanel, positionEditWorkspaceId, setPositionEditWorkspace]

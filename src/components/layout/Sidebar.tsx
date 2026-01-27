@@ -15,11 +15,18 @@ const PANEL_TABS: { id: ActivePanel; label: string; icon: string }[] = [
 ];
 
 export function Sidebar() {
-  const { activePanel, setActivePanel, sidebarCollapsed, toggleSidebar } = useUIStore();
+  const { activePanel, setActivePanel, sidebarCollapsed, toggleSidebar, toggleSettingsPanel } = useUIStore();
 
   if (sidebarCollapsed) {
     return (
       <div className="w-12 bg-canvas-surface border-l border-canvas-border flex flex-col items-center py-4">
+        <button
+          onClick={toggleSettingsPanel}
+          className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors mb-2"
+          title="Open settings"
+        >
+          ⚙️
+        </button>
         <button
           onClick={toggleSidebar}
           className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
@@ -52,7 +59,13 @@ export function Sidebar() {
     <div className="w-96 bg-canvas-surface border-l border-canvas-border flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-canvas-border">
-        <h2 className="text-base font-semibold text-gray-200">Giga Factory Center</h2>
+        <button
+          onClick={toggleSettingsPanel}
+          className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+          title="Open settings"
+        >
+          ⚙️
+        </button>
         <button
           onClick={toggleSidebar}
           className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded"

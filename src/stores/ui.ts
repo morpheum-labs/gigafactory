@@ -27,6 +27,7 @@ interface UIState {
   outputModalAgentId: string | null;
   editingWorkspaceId: string | null; // For inline name editing
   positionEditWorkspaceId: string | null; // For position editing mode
+  settingsPanelOpen: boolean;
   wiring: WiringState;
 
   selectWorkspace: (workspaceId: string | null) => void;
@@ -43,6 +44,7 @@ interface UIState {
   showOutputModal: (agentId: string | null) => void;
   setEditingWorkspace: (workspaceId: string | null) => void;
   setPositionEditWorkspace: (workspaceId: string | null) => void;
+  toggleSettingsPanel: () => void;
   startWiring: (workspaceId: string, type: 'input' | 'output', x: number, y: number) => void;
   updateWiring: (x: number, y: number) => void;
   endWiring: () => void;
@@ -64,6 +66,7 @@ export const useUIStore = create<UIState>()(
     outputModalAgentId: null,
     editingWorkspaceId: null,
     positionEditWorkspaceId: null,
+    settingsPanelOpen: false,
     wiring: {
       isWiring: false,
       fromWorkspaceId: null,
@@ -159,6 +162,12 @@ export const useUIStore = create<UIState>()(
     setPositionEditWorkspace: (workspaceId: string | null) => {
       set((state) => {
         state.positionEditWorkspaceId = workspaceId;
+      });
+    },
+
+    toggleSettingsPanel: () => {
+      set((state) => {
+        state.settingsPanelOpen = !state.settingsPanelOpen;
       });
     },
 

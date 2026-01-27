@@ -4,15 +4,18 @@ import { Sidebar } from './components/layout/Sidebar';
 import { StatusBar } from './components/layout/StatusBar';
 import { OutputModal } from './components/OutputModal';
 import { SetupPage } from './components/SetupPage';
+import { SettingsPanel } from './components/panels/SettingsPanel';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useAgentCommands } from './hooks/useAgentCommands';
 import { useUIStore } from './stores/ui';
 import { useConfigStore } from './stores/config';
+import { useSettingsStore } from './stores/settings';
 
 function App() {
   const { setCliAvailable, setCursorCliAvailable, setKiloCliAvailable, setGeminiCliAvailable, setGrokCliAvailable, setDeepseekCliAvailable, setStatusMessage } = useUIStore();
   const { checkAllClisAvailable } = useAgentCommands();
   const { config, loadConfig, isConfigured } = useConfigStore();
+  const { setCliAvailability } = useSettingsStore();
   const [showSetup, setShowSetup] = useState(false);
   const [checkingConfig, setCheckingConfig] = useState(true);
 
@@ -33,10 +36,10 @@ function App() {
     checkConfig();
   }, [loadConfig]);
 
-  // Show setup if config is not configured or skills_path is empty
+  // Show setup if config is not configured or skills_path or workspace_directory is empty
   useEffect(() => {
     if (!checkingConfig) {
-      if (!isConfigured || !config?.skills_path || config.skills_path.trim() === '') {
+      if (!isConfigured || !config?.skills_path || config.skills_path.trim() === '' || !config?.workspace_directory || config.workspace_directory.trim() === '') {
         setShowSetup(true);
       } else {
         setShowSetup(false);
@@ -59,7 +62,10 @@ function App() {
       const grok = clis.grok ?? false;
       const deepseek = clis.deepseek ?? false;
       
-      // Set individual CLI availability states
+      // Store CLI availability in settings store for global access
+      setCliAvailability(clis);
+      
+      // Set individual CLI availability states (for UI store/StatusBar)
       setCursorCliAvailable(cursor);
       setKiloCliAvailable(kilo);
       setGeminiCliAvailable(gemini);
@@ -76,6 +82,7 @@ function App() {
     check();
   }, [
     checkAllClisAvailable,
+    setCliAvailability,
     setCliAvailable,
     setCursorCliAvailable,
     setKiloCliAvailable,
@@ -106,6 +113,9 @@ function App() {
 
       {/* Modals */}
       <OutputModal />
+
+      {/* Settings Panel */}
+      <SettingsPanel />
     </div>
   );
 }

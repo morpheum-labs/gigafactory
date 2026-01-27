@@ -5,10 +5,21 @@ import { useAgentsStore } from '../stores/agents';
 import { useUIStore } from '../stores/ui';
 import { useAgentCommands } from '../hooks/useAgentCommands';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { CANVAS_COLORS, WORKSPACE_COLORS } from '../utils/colors';
+import { CANVAS_COLORS } from '../utils/colors';
 import { AGENT_EMOJIS, getRandomConfetti } from '../utils/emoji';
 import { playSound } from '../utils/sounds';
 import { MIN_WORKSPACE_SIZE } from '../types/workspace';
+import { ViewportController } from '../lib/canvas/ViewportController';
+import { GRID_SIZE, snapPositionToGrid as snapToGridUtil } from '../lib/canvas/CanvasUtils';
+import { renderGrid } from '../lib/canvas/GridRenderer';
+import { renderConnections } from '../lib/canvas/ConnectionRenderer';
+import { renderNodes } from '../lib/canvas/NodeRenderer';
+import { renderDrawingPreview } from '../lib/canvas/DrawingPreviewRenderer';
+import { PerformanceMonitor } from '../components/canvas/PerformanceMonitor';
+import { ContextMenu } from '../components/canvas/ContextMenu';
+import { TimelineSimulator } from '../components/canvas/TimelineSimulator';
+import { GraphModel, createNodeFromWorkspace, downloadGraphAsFile, loadGraphFromFile } from '../lib/graph';
+import { useViewportStore } from '../stores/viewport';
 
 interface Particle {
   text: Text;
@@ -25,17 +36,24 @@ export function CanvasRoot() {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const graphicsRef = useRef<Graphics | null>(null);
+  const gridLayerRef = useRef<Graphics | null>(null);
+  const connectionLayerRef = useRef<Graphics | null>(null);
+  const nodeLayerRef = useRef<Graphics | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const prevAgentStatesRef = useRef<Record<string, string>>({});
   const initializedRef = useRef(false);
   const mountedRef = useRef(true);
+  const viewportRef = useRef<ViewportController | null>(null);
+  const panningRef = useRef<{ isPanning: boolean; startX: number; startY: number } | null>(null);
+  const rightClickStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const drawing = useWorkspacesStore((s) => s.drawing);
   const { startDrawing, updateDrawing, finishDrawing, addWorkspace, connectWorkspaces, renameWorkspace, removeWorkspace, setTaskTemplate, setAutoRun, updateWorkspacePosition } = useWorkspacesStore();
   const agents = useAgentsStore((s) => s.agents);
-  const { selectedWorkspaceId, selectWorkspace, showOutputModal, editingWorkspaceId, setEditingWorkspace, positionEditWorkspaceId, wiring, startWiring, updateWiring, endWiring } = useUIStore();
+  const { selectedWorkspaceId, selectWorkspace, showOutputModal, editingWorkspaceId, setEditingWorkspace, positionEditWorkspaceId, wiring, startWiring, updateWiring, endWiring, sidebarCollapsed } = useUIStore();
   const { startTask, stopTask } = useAgentCommands();
+  const { viewportState, setViewportState } = useViewportStore();
 
   // Track which workspace has task input focused
   const [focusedTaskInput, setFocusedTaskInput] = useState<string | null>(null);
@@ -46,17 +64,36 @@ export function CanvasRoot() {
   
   // Track dragging state for position editing
   const [draggingWorkspace, setDraggingWorkspace] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
+  
+  // New UI state
+  const [contextMenu, setContextMenu] = useState<{ workspaceId: string; x: number; y: number } | null>(null);
+  const [showPerformanceMonitor, setShowPerformanceMonitor] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false); // Hidden by default
+  const [fps, setFps] = useState(60);
+  const [currentPhase, setCurrentPhase] = useState(0);
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(true); // Enable snap-to-grid by default
+
+  // Snap position to grid
+  const snapPositionToGrid = useCallback((x: number, y: number): { x: number; y: number } => {
+    return snapToGridUtil(x, y, GRID_SIZE, snapToGrid);
+  }, [snapToGrid]);
 
   // Quick-create workspace at position
   const quickCreateWorkspace = useCallback((x: number, y: number, autoConnect: boolean = true) => {
     // Center the workspace on the click position
-    const wsX = x - QUICK_CREATE_SIZE / 2;
-    const wsY = y - QUICK_CREATE_SIZE / 2;
+    let wsX = x - QUICK_CREATE_SIZE / 2;
+    let wsY = y - QUICK_CREATE_SIZE / 2;
+    
+    // Snap to grid
+    const snapped = snapPositionToGrid(wsX, wsY);
+    wsX = snapped.x;
+    wsY = snapped.y;
 
     const id = addWorkspace({
       name: `Workspace ${Object.keys(workspaces).length + 1}`,
-      x: Math.max(10, wsX),
-      y: Math.max(10, wsY),
+      x: wsX,
+      y: wsY,
       width: QUICK_CREATE_SIZE,
       height: QUICK_CREATE_SIZE,
       state: 'empty',
@@ -83,10 +120,51 @@ export function CanvasRoot() {
     return id;
   }, [addWorkspace, selectedWorkspaceId, connectWorkspaces, setAutoRun, selectWorkspace, workspaces]);
 
+  // Export/Import handlers
+  const handleExport = useCallback(() => {
+    const model = new GraphModel();
+    Object.values(workspaces).forEach(ws => {
+      const node = createNodeFromWorkspace(ws);
+      model.addNode(node);
+    });
+    // Add connections
+    Object.values(workspaces).forEach(ws => {
+      ws.outputConnections?.forEach(toId => {
+        model.connect(ws.id, 'output', toId, 'input');
+      });
+    });
+    downloadGraphAsFile(model, 'gigafactory-graph.json');
+    playSound('success');
+  }, [workspaces]);
+
+  const handleImport = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const model = await loadGraphFromFile(file);
+        if (model) {
+          // TODO: Convert graph model back to workspaces
+          // This would require additional store methods
+          console.log('Imported graph:', model);
+          playSound('success');
+        }
+      }
+    };
+    input.click();
+  }, []);
+
   // Keyboard shortcuts
   useKeyboardShortcuts({
     onCreateWorkspace: (x, y) => {
-      quickCreateWorkspace(x, y, true);
+      if (viewportRef.current) {
+        const world = viewportRef.current.screenToWorld(x, y);
+        quickCreateWorkspace(world.x, world.y, true);
+      } else {
+        quickCreateWorkspace(x, y, true);
+      }
     },
     onRunTask: async (workspaceId) => {
       const ws = workspaces[workspaceId];
@@ -121,6 +199,71 @@ export function CanvasRoot() {
     },
   });
 
+  // Enhanced keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // P = Toggle performance monitor
+      if (e.key.toLowerCase() === 'p' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setShowPerformanceMonitor(prev => !prev);
+      }
+
+      // Y = Toggle timeline simulator
+      if (e.key.toLowerCase() === 'y' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setShowTimeline(prev => !prev);
+      }
+
+      // Ctrl+E = Export
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        handleExport();
+      }
+
+      // Ctrl+I = Import
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        handleImport();
+      }
+
+      // Space = Pan mode
+      if (e.key === ' ' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setIsSpacePressed(true);
+      }
+
+      // 0 = Reset viewport
+      if (e.key === '0' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        viewportRef.current?.reset();
+      }
+
+      // G = Toggle snap to grid
+      if (e.key.toLowerCase() === 'g' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setSnapToGrid(prev => !prev);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        setIsSpacePressed(false);
+        panningRef.current = null;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [handleExport, handleImport]);
+
   // Initialize PixiJS
   useEffect(() => {
     mountedRef.current = true;
@@ -150,12 +293,62 @@ export function CanvasRoot() {
         container.appendChild(app.canvas);
         appRef.current = app;
 
-        const graphics = new Graphics();
-        app.stage.addChild(graphics);
-        graphicsRef.current = graphics;
+        // Create layered rendering system
+        const gridLayer = new Graphics();
+        const connectionLayer = new Graphics();
+        const nodeLayer = new Graphics();
+        
+        app.stage.addChild(gridLayer);
+        app.stage.addChild(connectionLayer);
+        app.stage.addChild(nodeLayer);
+        
+        gridLayerRef.current = gridLayer;
+        connectionLayerRef.current = connectionLayer;
+        nodeLayerRef.current = nodeLayer;
+        graphicsRef.current = nodeLayer; // Keep for backward compatibility
+
+        // Initialize viewport with saved state
+        const savedViewportState = viewportState;
+        viewportRef.current = new ViewportController(savedViewportState || undefined);
+        
+        // Apply saved state to stage immediately
+        if (app.stage && savedViewportState) {
+          app.stage.x = savedViewportState.x ?? 0;
+          app.stage.y = savedViewportState.y ?? 0;
+          app.stage.scale.set(savedViewportState.scale ?? 1);
+        }
+        
+        // Save viewport state changes to localStorage
+        viewportRef.current.setOnStateChange((state) => {
+          if (app.stage) {
+            app.stage.x = state.x;
+            app.stage.y = state.y;
+            app.stage.scale.set(state.scale);
+          }
+          // Persist viewport state
+          setViewportState({
+            x: state.x,
+            y: state.y,
+            scale: state.scale,
+          });
+        });
+
+        // FPS tracking
+        let lastTime = performance.now();
+        let frameCount = 0;
 
         app.ticker.add(() => {
           if (!mountedRef.current) return;
+          
+          // Update FPS
+          const now = performance.now();
+          frameCount++;
+          if (now - lastTime >= 1000) {
+            setFps(frameCount);
+            frameCount = 0;
+            lastTime = now;
+          }
+          
           renderCanvas();
           updateParticles();
         });
@@ -257,128 +450,60 @@ export function CanvasRoot() {
   };
 
   const renderCanvas = useCallback(() => {
-    const g = graphicsRef.current;
-    if (!g) return;
+    const gridLayer = gridLayerRef.current;
+    const connectionLayer = connectionLayerRef.current;
+    const nodeLayer = nodeLayerRef.current;
+    if (!gridLayer || !connectionLayer || !nodeLayer) return;
 
-    g.clear();
+    // Render grid layer
+    renderGrid(
+      gridLayer,
+      viewportRef.current,
+      containerRef.current?.getBoundingClientRect() || null
+    );
 
-    // Draw subtle dot grid
-    g.setFillStyle({ color: 0x404060, alpha: 0.3 });
-    for (let x = 0; x < 2000; x += 40) {
-      for (let y = 0; y < 2000; y += 40) {
-        g.circle(x, y, 1.5);
-        g.fill();
-      }
-    }
+    // Render connections layer
+    renderConnections(
+      connectionLayer,
+      workspaces
+    );
 
-    // Draw connection lines between workspaces
-    Object.values(workspaces).forEach((fromWs) => {
-      fromWs.outputConnections?.forEach((toId) => {
-        const toWs = workspaces[toId];
-        if (!toWs) return;
+    // Render nodes (workspaces)
+    renderNodes(
+      nodeLayer,
+      workspaces,
+      agents,
+      selectedWorkspaceId
+    );
 
-        const fromX = fromWs.x + fromWs.width;
-        const fromY = fromWs.y + fromWs.height / 2;
-        const toX = toWs.x;
-        const toY = toWs.y + toWs.height / 2;
-
-        const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
-
-        // Animated glow for active connections
-        const isActive = fromWs.state === 'working' || toWs.state === 'working';
-
-        if (isActive) {
-          g.setStrokeStyle({ width: 8, color: 0x60a5fa, alpha: 0.2 });
-          g.moveTo(fromX, fromY);
-          g.bezierCurveTo(fromX + controlOffset, fromY, toX - controlOffset, toY, toX, toY);
-          g.stroke();
-        }
-
-        g.setStrokeStyle({ width: 3, color: 0x60a5fa, alpha: isActive ? 1 : 0.6 });
-        g.moveTo(fromX, fromY);
-        g.bezierCurveTo(fromX + controlOffset, fromY, toX - controlOffset, toY, toX, toY);
-        g.stroke();
-
-        // Arrow
-        const arrowSize = 10;
-        g.setFillStyle({ color: 0x60a5fa, alpha: 0.9 });
-        g.moveTo(toX, toY);
-        g.lineTo(toX - arrowSize, toY - arrowSize / 2);
-        g.lineTo(toX - arrowSize, toY + arrowSize / 2);
-        g.closePath();
-        g.fill();
-
-        // Source dot
-        g.setFillStyle({ color: 0x60a5fa, alpha: 1 });
-        g.circle(fromX, fromY, 6);
-        g.fill();
-      });
-    });
-
-    // Draw workspaces
-    Object.values(workspaces).forEach((workspace) => {
-      const colors = WORKSPACE_COLORS[workspace.state];
-      const isSelected = selectedWorkspaceId === workspace.id;
-
-      g.setFillStyle({ color: colors.fill, alpha: 0.85 });
-      g.rect(workspace.x, workspace.y, workspace.width, workspace.height);
-      g.fill();
-
-      if (isSelected) {
-        g.setStrokeStyle({ width: 8, color: 0xffd700, alpha: 0.15 });
-        g.rect(workspace.x - 6, workspace.y - 6, workspace.width + 12, workspace.height + 12);
-        g.stroke();
-
-        g.setStrokeStyle({ width: 4, color: 0xffd700, alpha: 0.3 });
-        g.rect(workspace.x - 3, workspace.y - 3, workspace.width + 6, workspace.height + 6);
-        g.stroke();
-
-        g.setFillStyle({ color: 0xffd700, alpha: 0.08 });
-        g.rect(workspace.x, workspace.y, workspace.width, workspace.height);
-        g.fill();
-      }
-
-      g.setStrokeStyle({
-        width: isSelected ? 4 : 2,
-        color: isSelected ? 0xffd700 : colors.border,
-        alpha: 1,
-      });
-      g.rect(workspace.x, workspace.y, workspace.width, workspace.height);
-      g.stroke();
-
-      const agent = workspace.agentId ? agents[workspace.agentId] : null;
-      if (agent) {
-        const cx = workspace.x + workspace.width / 2;
-        const cy = workspace.y + workspace.height / 2;
-        g.setFillStyle({ color: 0x1a1a2e, alpha: 0.8 });
-        g.circle(cx, cy, 28);
-        g.fill();
-        g.setStrokeStyle({ width: 2, color: colors.border, alpha: 0.6 });
-        g.circle(cx, cy, 28);
-        g.stroke();
-      }
-    });
-
-    // Drawing preview
-    if (drawing.isDrawing && drawing.start && drawing.current) {
-      const x = Math.min(drawing.start.x, drawing.current.x);
-      const y = Math.min(drawing.start.y, drawing.current.y);
-      const width = Math.abs(drawing.current.x - drawing.start.x);
-      const height = Math.abs(drawing.current.y - drawing.start.y);
-
-      g.setFillStyle({ color: 0x4299e1, alpha: 0.15 });
-      g.rect(x, y, width, height);
-      g.fill();
-
-      g.setStrokeStyle({ width: 3, color: 0x4299e1, alpha: 1 });
-      g.rect(x, y, width, height);
-      g.stroke();
-    }
+    // Render drawing preview
+    renderDrawingPreview(nodeLayer, drawing);
   }, [workspaces, drawing, selectedWorkspaceId, agents]);
 
   useEffect(() => {
     renderCanvas();
   }, [renderCanvas]);
+
+  // Watch for container resize (e.g., when sidebar toggles)
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    const resizeObserver = new ResizeObserver(() => {
+      // Trigger re-render when container size changes
+      renderCanvas();
+    });
+    
+    resizeObserver.observe(containerRef.current);
+    
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [renderCanvas]);
+
+  // Re-render grid when sidebar state changes
+  useEffect(() => {
+    renderCanvas();
+  }, [sidebarCollapsed, renderCanvas]);
 
   // Focus task input when activated
   useEffect(() => {
@@ -395,6 +520,19 @@ export function CanvasRoot() {
     }
   }, [editingWorkspaceId]);
 
+  // Handle wheel zoom - classic behavior: zoom centered on mouse pointer
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!viewportRef.current || !containerRef.current) return;
+    e.preventDefault();
+    const rect = containerRef.current.getBoundingClientRect();
+    // Get mouse position relative to container
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    // Zoom in/out centered on mouse pointer position
+    const zoomDelta = e.deltaY < 0 ? 1 : -1;
+    viewportRef.current.zoom(zoomDelta, x, y);
+  }, []);
+
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       const rect = containerRef.current?.getBoundingClientRect();
@@ -403,16 +541,44 @@ export function CanvasRoot() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
+      // Handle panning with right-click drag (classic behavior)
+      if (e.button === 2 && !wiring.isWiring && !positionEditWorkspaceId) {
+        e.preventDefault();
+        e.stopPropagation();
+        // Start panning immediately on right-click down
+        panningRef.current = { isPanning: true, startX: x, startY: y };
+        rightClickStartRef.current = { x, y, time: Date.now() };
+        // Capture pointer for smooth dragging
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Handle panning with space or middle mouse (alternative methods)
+      if ((isSpacePressed || e.button === 1) && !wiring.isWiring) {
+        e.preventDefault();
+        panningRef.current = { isPanning: true, startX: x, startY: y };
+        return;
+      }
+
+      // Convert screen to world coordinates early for all operations
+      let worldX = x;
+      let worldY = y;
+      if (viewportRef.current) {
+        const world = viewportRef.current.screenToWorld(x, y);
+        worldX = world.x;
+        worldY = world.y;
+      }
+
       // Check if we're in position edit mode and clicking on the workspace being edited
       if (positionEditWorkspaceId && e.button === 0) {
         const clickedWorkspace = Object.values(workspaces).find(
-          (ws) => x >= ws.x && x <= ws.x + ws.width && y >= ws.y && y <= ws.y + ws.height && ws.id === positionEditWorkspaceId
+          (ws) => worldX >= ws.x && worldX <= ws.x + ws.width && worldY >= ws.y && worldY <= ws.y + ws.height && ws.id === positionEditWorkspaceId
         );
 
         if (clickedWorkspace) {
           // Start dragging
-          const offsetX = x - clickedWorkspace.x;
-          const offsetY = y - clickedWorkspace.y;
+          const offsetX = worldX - clickedWorkspace.x;
+          const offsetY = worldY - clickedWorkspace.y;
           setDraggingWorkspace({ id: clickedWorkspace.id, offsetX, offsetY });
           e.preventDefault();
           e.stopPropagation();
@@ -423,15 +589,23 @@ export function CanvasRoot() {
       // If we're wiring and click on empty space, create a workspace and connect to it!
       if (wiring.isWiring && wiring.fromWorkspaceId && e.button === 0) {
         const clickedWorkspace = Object.values(workspaces).find(
-          (ws) => x >= ws.x && x <= ws.x + ws.width && y >= ws.y && y <= ws.y + ws.height
+          (ws) => worldX >= ws.x && worldX <= ws.x + ws.width && worldY >= ws.y && worldY <= ws.y + ws.height
         );
 
         if (!clickedWorkspace) {
-          // Create new workspace and connect
+          // Create new workspace and connect (use world coordinates)
+          let wsX = worldX - QUICK_CREATE_SIZE / 2;
+          let wsY = worldY - QUICK_CREATE_SIZE / 2;
+          
+          // Snap to grid
+          const snapped = snapPositionToGrid(wsX, wsY);
+          wsX = snapped.x;
+          wsY = snapped.y;
+          
           const newId = addWorkspace({
             name: `Workspace ${Object.keys(workspaces).length + 1}`,
-            x: x - QUICK_CREATE_SIZE / 2,
-            y: y - QUICK_CREATE_SIZE / 2,
+            x: wsX,
+            y: wsY,
             width: QUICK_CREATE_SIZE,
             height: QUICK_CREATE_SIZE,
             state: 'empty',
@@ -470,8 +644,9 @@ export function CanvasRoot() {
         }
       }
 
+      // Use world coordinates already calculated above
       const clickedWorkspace = Object.values(workspaces).find(
-        (ws) => x >= ws.x && x <= ws.x + ws.width && y >= ws.y && y <= ws.y + ws.height
+        (ws) => worldX >= ws.x && worldX <= ws.x + ws.width && worldY >= ws.y && worldY <= ws.y + ws.height
       );
 
       if (clickedWorkspace) {
@@ -481,39 +656,72 @@ export function CanvasRoot() {
         selectWorkspace(clickedWorkspace.id);
       } else if (e.button === 0 && !positionEditWorkspaceId) {
         // Left click on empty space - start drawing (only if not in position edit mode)
-        startDrawing(x, y);
+        startDrawing(worldX, worldY);
       }
     },
-    [workspaces, startDrawing, selectWorkspace, selectedWorkspaceId, wiring, addWorkspace, connectWorkspaces, setAutoRun, endWiring, positionEditWorkspaceId]
+    [workspaces, startDrawing, selectWorkspace, selectedWorkspaceId, wiring, addWorkspace, connectWorkspaces, setAutoRun, endWiring, positionEditWorkspaceId, isSpacePressed, snapToGrid, snapPositionToGrid]
   );
 
-  // Right-click to quick-create
+  // Right-click context menu - prevent default to allow our custom handling
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      // Always prevent default context menu
+      // We handle right-click in handlePointerUp to distinguish drag vs click
       e.preventDefault();
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      // Check if right-clicking on a workspace
-      const clickedWorkspace = Object.values(workspaces).find(
-        (ws) => x >= ws.x && x <= ws.x + ws.width && y >= ws.y && y <= ws.y + ws.height
-      );
-
-      if (clickedWorkspace) {
-        // Could show context menu here in future
-        selectWorkspace(clickedWorkspace.id);
-      } else {
-        // Quick-create on empty space
-        quickCreateWorkspace(x, y, true);
-      }
     },
-    [workspaces, selectWorkspace, quickCreateWorkspace]
+    []
   );
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e?: React.PointerEvent) => {
+    // Handle panning completion (right-click drag)
+    if (panningRef.current?.isPanning && rightClickStartRef.current && e) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        const wasDrag = Math.abs(currentX - rightClickStartRef.current.x) > 5 ||
+                        Math.abs(currentY - rightClickStartRef.current.y) > 5;
+        
+        panningRef.current = null;
+        
+        // If it was just a click (not a drag), show context menu or create workspace
+        if (!wasDrag) {
+          // Convert to world coordinates
+          let worldX = currentX;
+          let worldY = currentY;
+          if (viewportRef.current) {
+            const world = viewportRef.current.screenToWorld(currentX, currentY);
+            worldX = world.x;
+            worldY = world.y;
+          }
+          
+          // Check if clicking on workspace
+          const clickedWorkspace = Object.values(workspaces).find(
+            (ws) => worldX >= ws.x && worldX <= ws.x + ws.width && worldY >= ws.y && worldY <= ws.y + ws.height
+          );
+          
+          if (clickedWorkspace) {
+            setContextMenu({ workspaceId: clickedWorkspace.id, x: e.clientX, y: e.clientY });
+            selectWorkspace(clickedWorkspace.id);
+          } else {
+            quickCreateWorkspace(worldX, worldY, true);
+          }
+        }
+      }
+      
+      rightClickStartRef.current = null;
+      if (e.target) {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
+    
+    // Handle other panning completion (space/middle mouse)
+    if (panningRef.current?.isPanning) {
+      panningRef.current = null;
+      return;
+    }
+
     // Handle position dragging completion
     if (draggingWorkspace) {
       setDraggingWorkspace(null);
@@ -522,14 +730,23 @@ export function CanvasRoot() {
 
     // Handle wiring completion
     if (wiring.isWiring) {
+      // Convert wiring mouse position to world coordinates
+      let worldMouseX = wiring.mouseX;
+      let worldMouseY = wiring.mouseY;
+      if (viewportRef.current) {
+        const world = viewportRef.current.screenToWorld(wiring.mouseX, wiring.mouseY);
+        worldMouseX = world.x;
+        worldMouseY = world.y;
+      }
+
       // Find any workspace we're hovering over (not just the port - ANYWHERE on the workspace)
       const targetWorkspace = Object.values(workspaces).find((ws) => {
         if (ws.id === wiring.fromWorkspaceId) return false;
-        // Check if mouse is anywhere inside the workspace bounds
-        return wiring.mouseX >= ws.x &&
-               wiring.mouseX <= ws.x + ws.width &&
-               wiring.mouseY >= ws.y &&
-               wiring.mouseY <= ws.y + ws.height;
+        // Check if mouse is anywhere inside the workspace bounds (using world coordinates)
+        return worldMouseX >= ws.x &&
+               worldMouseX <= ws.x + ws.width &&
+               worldMouseY >= ws.y &&
+               worldMouseY <= ws.y + ws.height;
       });
 
       if (targetWorkspace && wiring.fromWorkspaceId) {
@@ -548,10 +765,19 @@ export function CanvasRoot() {
 
     const result = finishDrawing();
     if (result) {
+      // Snap drawn workspace to grid
+      let wsX = result.x;
+      let wsY = result.y;
+      if (snapToGrid) {
+        const snapped = snapPositionToGrid(wsX, wsY);
+        wsX = snapped.x;
+        wsY = snapped.y;
+      }
+      
       const id = addWorkspace({
         name: `Workspace ${Object.keys(workspaces).length + 1}`,
-        x: result.x,
-        y: result.y,
+        x: wsX,
+        y: wsY,
         width: result.width,
         height: result.height,
         state: 'empty',
@@ -575,7 +801,7 @@ export function CanvasRoot() {
       setFocusedTaskInput(id);
       setTaskInputValue('');
     }
-  }, [finishDrawing, addWorkspace, selectWorkspace, wiring, workspaces, connectWorkspaces, endWiring, selectedWorkspaceId, setAutoRun, draggingWorkspace]);
+  }, [finishDrawing, addWorkspace, selectWorkspace, wiring, workspaces, connectWorkspaces, endWiring, selectedWorkspaceId, setAutoRun, draggingWorkspace, snapToGrid, snapPositionToGrid, quickCreateWorkspace]);
 
   const handleCanvasPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -585,10 +811,37 @@ export function CanvasRoot() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
 
+      // Handle panning (right-click drag or space/middle mouse)
+      if (panningRef.current?.isPanning && viewportRef.current) {
+        const dx = x - panningRef.current.startX;
+        const dy = y - panningRef.current.startY;
+        viewportRef.current.pan(dx, dy);
+        panningRef.current.startX = x;
+        panningRef.current.startY = y;
+        return;
+      }
+
+      // Convert screen to world coordinates
+      let worldX = x;
+      let worldY = y;
+      if (viewportRef.current) {
+        const world = viewportRef.current.screenToWorld(x, y);
+        worldX = world.x;
+        worldY = world.y;
+      }
+
       // Handle position dragging
       if (draggingWorkspace) {
-        const newX = Math.max(0, x - draggingWorkspace.offsetX);
-        const newY = Math.max(0, y - draggingWorkspace.offsetY);
+        let newX = worldX - draggingWorkspace.offsetX;
+        let newY = worldY - draggingWorkspace.offsetY;
+        
+        // Snap to grid if enabled
+        if (snapToGrid) {
+          const snapped = snapPositionToGrid(newX, newY);
+          newX = snapped.x;
+          newY = snapped.y;
+        }
+        
         updateWorkspacePosition(draggingWorkspace.id, newX, newY);
         return;
       }
@@ -596,10 +849,10 @@ export function CanvasRoot() {
       if (wiring.isWiring) {
         updateWiring(x, y);
       } else if (drawing.isDrawing) {
-        updateDrawing(x, y);
+        updateDrawing(worldX, worldY);
       }
     },
-    [drawing.isDrawing, updateDrawing, wiring.isWiring, updateWiring, draggingWorkspace, updateWorkspacePosition]
+    [drawing.isDrawing, updateDrawing, wiring.isWiring, updateWiring, draggingWorkspace, updateWorkspacePosition, workspaces, snapToGrid, snapPositionToGrid]
   );
 
   // Handle task submission
@@ -623,7 +876,44 @@ export function CanvasRoot() {
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerUp}
       onContextMenu={handleContextMenu}
+      onWheel={handleWheel}
+      style={{ 
+        cursor: panningRef.current?.isPanning ? 'grabbing' : 
+                isSpacePressed ? 'grab' : 
+                'crosshair' 
+      }}
+      onPointerCancel={(e) => {
+        // Handle pointer cancellation (e.g., when leaving canvas)
+        if (panningRef.current?.isPanning) {
+          panningRef.current = null;
+          rightClickStartRef.current = null;
+          if (e.target) {
+            (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+          }
+        }
+      }}
     >
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          workspaceId={contextMenu.workspaceId}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Performance Monitor */}
+      <PerformanceMonitor fps={fps} visible={showPerformanceMonitor} />
+
+      {/* Timeline Simulator */}
+      {Object.keys(workspaces).length > 0 && showTimeline && (
+        <TimelineSimulator
+          currentPhase={currentPhase}
+          totalPhases={5}
+          onPhaseChange={setCurrentPhase}
+        />
+      )}
       {/* Workspace cards */}
       {Object.values(workspaces).map((workspace, index) => {
         const agent = workspace.agentId ? agents[workspace.agentId] : null;
@@ -667,22 +957,43 @@ export function CanvasRoot() {
 
         const lastMessage = agent?.logs?.filter(l => l.type === 'message').pop();
 
+        // Get current viewport scale
+        const viewport = viewportRef.current?.getState();
+        const currentScale = viewport?.scale ?? 1;
+        
+        // Workspaces are HTML divs, so they need to be positioned in screen coordinates
+        // and scaled to match the viewport scale
+        const screenPos = viewportRef.current 
+          ? viewportRef.current.worldToScreen(workspace.x, workspace.y)
+          : { x: workspace.x, y: workspace.y };
+        
+        // Show only title when zoomed out below 40%
+        const showTitleOnly = currentScale < 0.4;
+        
+        // Apply scale transform to workspace to match viewport zoom
+        // Since we're already in screen coordinates, we scale from top-left
+        const transform = `scale(${currentScale})`;
+        const transformOrigin = '0 0'; // Scale from top-left corner
+
         return (
           <div
             key={workspace.id}
-            className={`absolute rounded-lg transition-all duration-200 group ${
-              isSelected ? 'shadow-lg shadow-yellow-500/30 z-20' : 'z-10'
-            } ${workspace.state === 'success' ? 'shadow-lg shadow-emerald-500/30' : ''} ${
-              isPositionEditing ? 'ring-4 ring-blue-500/50 shadow-lg shadow-blue-500/30' : ''
-            }`}
+            className={`absolute rounded-lg group ${
+              isSelected ? 'z-20' : 'z-10'
+            } ${
+              isPositionEditing ? 'ring-4 ring-blue-500/50' : ''
+            } ${showTitleOnly ? 'min-w-0' : ''}`}
             style={{
-              left: workspace.x,
-              top: workspace.y,
+              left: screenPos.x,
+              top: screenPos.y,
               width: workspace.width,
               height: workspace.height,
               border: `3px solid ${borderColor}`,
               backgroundColor: getBgColor(),
               cursor: positionEditWorkspaceId === workspace.id ? 'move' : 'default',
+              transform: transform,
+              transformOrigin: transformOrigin,
+              willChange: 'transform', // Optimize for scaling
             }}
             onPointerDown={(e) => {
               // Don't select workspace if we're in the middle of wiring
@@ -693,11 +1004,13 @@ export function CanvasRoot() {
               // If in position edit mode and this is the workspace being edited, handle drag
               if (positionEditWorkspaceId === workspace.id && e.button === 0) {
                 const rect = containerRef.current?.getBoundingClientRect();
-                if (rect) {
+                if (rect && viewportRef.current) {
                   const x = e.clientX - rect.left;
                   const y = e.clientY - rect.top;
-                  const offsetX = x - workspace.x;
-                  const offsetY = y - workspace.y;
+                  // Convert screen coordinates to world coordinates before calculating offset
+                  const world = viewportRef.current.screenToWorld(x, y);
+                  const offsetX = world.x - workspace.x;
+                  const offsetY = world.y - workspace.y;
                   setDraggingWorkspace({ id: workspace.id, offsetX, offsetY });
                   (e.target as HTMLElement).setPointerCapture(e.pointerId);
                   e.preventDefault();
@@ -711,34 +1024,20 @@ export function CanvasRoot() {
               }
             }}
           >
-            {/* Workspace number badge */}
+            {/* Workspace number badge - hide when zoomed out */}
+            {!showTitleOnly && (
             <div className="absolute -top-3 -left-3 w-6 h-6 rounded-full bg-gray-800 border-2 border-gray-600 flex items-center justify-center text-xs font-bold text-gray-300">
               {index + 1}
             </div>
+            )}
 
-            {/* Delete button */}
-            <button
-              className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center text-xs text-white pointer-events-auto opacity-0 hover:opacity-100 transition-opacity group-hover:opacity-70"
-              onClick={(e) => {
-                e.stopPropagation();
-                playSound('delete');
-                removeWorkspace(workspace.id);
-                if (selectedWorkspaceId === workspace.id) {
-                  selectWorkspace(null);
-                }
-              }}
-              title="Delete (Del)"
-            >
-              ×
-            </button>
-
-            {/* Drag zone highlight when wiring is active */}
-            {wiring.isWiring && wiring.fromWorkspaceId !== workspace.id && (
+            {/* Drag zone highlight when wiring is active - hide when zoomed out */}
+            {!showTitleOnly && wiring.isWiring && wiring.fromWorkspaceId !== workspace.id && (
               <div className="absolute inset-0 rounded-lg border-4 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none animate-pulse" />
             )}
             
-            {/* Position edit mode indicator and drag overlay */}
-            {isPositionEditing && (
+            {/* Position edit mode indicator and drag overlay - hide when zoomed out */}
+            {!showTitleOnly && isPositionEditing && (
               <>
                 <div className="absolute inset-0 rounded-lg border-4 border-dashed border-blue-400 bg-blue-500/10 pointer-events-none flex items-center justify-center z-30">
                   <div className="bg-blue-600/90 text-white px-3 py-1 rounded text-xs font-bold">
@@ -751,11 +1050,13 @@ export function CanvasRoot() {
                   onPointerDown={(e) => {
                     if (e.button === 0) {
                       const rect = containerRef.current?.getBoundingClientRect();
-                      if (rect) {
+                      if (rect && viewportRef.current) {
                         const x = e.clientX - rect.left;
                         const y = e.clientY - rect.top;
-                        const offsetX = x - workspace.x;
-                        const offsetY = y - workspace.y;
+                        // Convert screen coordinates to world coordinates before calculating offset
+                        const world = viewportRef.current.screenToWorld(x, y);
+                        const offsetX = world.x - workspace.x;
+                        const offsetY = world.y - workspace.y;
                         setDraggingWorkspace({ id: workspace.id, offsetX, offsetY });
                         (e.target as HTMLElement).setPointerCapture(e.pointerId);
                         e.preventDefault();
@@ -772,7 +1073,8 @@ export function CanvasRoot() {
               </>
             )}
 
-            {/* INPUT PORT */}
+            {/* INPUT PORT - hide when zoomed out */}
+            {!showTitleOnly && (
             <div
               className="absolute pointer-events-auto cursor-grab group"
               style={{ left: -14, top: 0, bottom: 0, width: 50 }}
@@ -833,8 +1135,10 @@ export function CanvasRoot() {
                 <span className="text-sm text-white font-bold">+</span>
               </div>
             </div>
+            )}
 
-            {/* OUTPUT PORT + Large drag zone on right edge */}
+            {/* OUTPUT PORT + Large drag zone on right edge - hide when zoomed out */}
+            {!showTitleOnly && (
             <div
               className="absolute pointer-events-auto cursor-grab active:cursor-grabbing group"
               style={{ right: -14, top: 0, bottom: 0, width: 50 }}
@@ -903,10 +1207,11 @@ export function CanvasRoot() {
                 Drag to connect →
               </div>
             </div>
+            )}
 
             {/* Card content */}
             <div className="w-full h-full flex flex-col p-3 pointer-events-none">
-              {/* Header */}
+              {/* Header - Always show title */}
               <div className={`flex items-center justify-between mb-2 px-2 py-1.5 rounded ${
                 isSelected ? 'bg-yellow-500/20' : 'bg-black/40'
               }`}>
@@ -956,8 +1261,8 @@ export function CanvasRoot() {
                 </span>
               </div>
 
-              {/* Connection indicators */}
-              {(hasInputs || workspace.autoRun) && (
+              {/* Connection indicators - hide when zoomed out */}
+              {!showTitleOnly && (hasInputs || workspace.autoRun) && (
                 <div className="flex items-center gap-2 mb-2 text-[10px]">
                   {hasInputs && (
                     <span className="text-blue-400 bg-blue-900/50 px-2 py-0.5 rounded">
@@ -972,7 +1277,8 @@ export function CanvasRoot() {
                 </div>
               )}
 
-              {/* Main content area */}
+              {/* Main content area - hide when zoomed out */}
+              {!showTitleOnly && (
               <div className="flex-1 flex flex-col items-center justify-center min-h-0">
                 {isAgentBusy ? (
                   // Working state
@@ -1091,9 +1397,10 @@ export function CanvasRoot() {
                   </div>
                 )}
               </div>
+              )}
 
-              {/* Output connections */}
-              {hasOutputs && (
+              {/* Output connections - hide when zoomed out */}
+              {!showTitleOnly && hasOutputs && (
                 <div className="mt-auto pt-2 border-t border-gray-700/50 text-[10px] text-green-400 truncate">
                   → {workspace.outputConnections?.map(id => workspaces[id]?.name || 'Untitled').join(', ')}
                 </div>
@@ -1109,10 +1416,10 @@ export function CanvasRoot() {
         style={{ zIndex: 25, overflow: 'visible' }}
       >
         <defs>
-          <marker id="arrowhead-connection" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <marker id="arrowhead-connection" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
             <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
           </marker>
-          <marker id="arrowhead-connection-active" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <marker id="arrowhead-connection-active" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
             <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
           </marker>
           <filter id="glow-connection">
@@ -1128,10 +1435,18 @@ export function CanvasRoot() {
             const toWs = workspaces[toId];
             if (!toWs) return null;
 
-            const fromX = fromWs.x + fromWs.width;
-            const fromY = fromWs.y + fromWs.height / 2;
-            const toX = toWs.x;
-            const toY = toWs.y + toWs.height / 2;
+            // Convert world coordinates to screen coordinates for SVG connections
+            const fromScreen = viewportRef.current 
+              ? viewportRef.current.worldToScreen(fromWs.x + fromWs.width, fromWs.y + fromWs.height / 2)
+              : { x: fromWs.x + fromWs.width, y: fromWs.y + fromWs.height / 2 };
+            const toScreen = viewportRef.current
+              ? viewportRef.current.worldToScreen(toWs.x, toWs.y + toWs.height / 2)
+              : { x: toWs.x, y: toWs.y + toWs.height / 2 };
+            
+            const fromX = fromScreen.x;
+            const fromY = fromScreen.y;
+            const toX = toScreen.x;
+            const toY = toScreen.y;
 
             const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
             const isActive = fromWs.state === 'working' || toWs.state === 'working';
@@ -1174,8 +1489,17 @@ export function CanvasRoot() {
         const fromWs = workspaces[wiring.fromWorkspaceId];
         if (!fromWs) return null;
 
-        const fromX = wiring.fromType === 'output' ? fromWs.x + fromWs.width : fromWs.x;
-        const fromY = fromWs.y + fromWs.height / 2;
+        // Calculate connection point in world coordinates
+        const fromWorldX = wiring.fromType === 'output' ? fromWs.x + fromWs.width : fromWs.x;
+        const fromWorldY = fromWs.y + fromWs.height / 2;
+        
+        // Convert to screen coordinates for SVG rendering
+        const fromScreen = viewportRef.current 
+          ? viewportRef.current.worldToScreen(fromWorldX, fromWorldY)
+          : { x: fromWorldX, y: fromWorldY };
+        
+        const fromX = fromScreen.x;
+        const fromY = fromScreen.y;
 
         return (
           <svg
@@ -1242,7 +1566,8 @@ export function CanvasRoot() {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center bg-black/60 backdrop-blur px-12 py-10 rounded-2xl border border-gray-700">
             <div className="text-4xl mb-4">🚀</div>
-            <p className="text-xl mb-2 text-white font-semibold">Right-click to create a workspace</p>
+            <p className="text-xl mb-2 text-white font-semibold">Right-click (hold & drag) to pan</p>
+            <p className="text-sm text-gray-400 mb-2">Right-click (quick) to create workspace</p>
             <p className="text-sm text-gray-400 mb-6">or drag to draw a custom size</p>
             <div className="grid grid-cols-2 gap-4 text-sm text-gray-500">
               <div className="text-left">
@@ -1281,7 +1606,20 @@ export function CanvasRoot() {
           <span className="text-blue-400 font-mono">T</span> task &nbsp;
           <span className="text-blue-400 font-mono">R</span> run &nbsp;
           <span className="text-blue-400 font-mono">C</span> connect &nbsp;
-          <span className="text-blue-400 font-mono">Tab</span> cycle
+          <span className="text-blue-400 font-mono">M</span> move &nbsp;
+          <span className="text-blue-400 font-mono">Tab</span> cycle &nbsp;
+          <span className="text-blue-400 font-mono">P</span> perf &nbsp;
+          <span className="text-blue-400 font-mono">G</span> grid {snapToGrid ? '✓' : '✗'} &nbsp;
+          <span className="text-blue-400 font-mono">Ctrl+E</span> export &nbsp;
+          <span className="text-blue-400 font-mono">Wheel</span> zoom &nbsp;
+          <span className="text-blue-400 font-mono">Right-drag</span> pan
+        </div>
+      )}
+      
+      {/* Grid snap indicator */}
+      {snapToGrid && (
+        <div className="absolute top-4 left-4 text-xs text-gray-400 bg-black/60 backdrop-blur px-2 py-1 rounded pointer-events-none">
+          <span className="text-green-400">Grid snap: ON</span>
         </div>
       )}
 
