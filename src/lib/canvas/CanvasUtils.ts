@@ -67,3 +67,25 @@ export function calculateGridBounds(
     endY: Math.ceil(bounds.maxY / gridSize) * gridSize + gridSize,
   };
 }
+
+/**
+ * Check if a workspace is visible in the viewport
+ */
+export function isWorkspaceVisible(
+  workspace: { x: number; y: number; width: number; height: number },
+  bounds: Bounds
+): boolean {
+  return !(
+    workspace.x + workspace.width < bounds.minX ||
+    workspace.x > bounds.maxX ||
+    workspace.y + workspace.height < bounds.minY ||
+    workspace.y > bounds.maxY
+  );
+}
+
+/**
+ * Check if a point is visible in the viewport
+ */
+export function isPointVisible(x: number, y: number, bounds: Bounds): boolean {
+  return x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+}

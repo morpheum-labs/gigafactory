@@ -44,6 +44,7 @@ export function CanvasRoot() {
   const initializedRef = useRef(false);
   const mountedRef = useRef(true);
   const viewportRef = useRef<ViewportController | null>(null);
+  const renderCanvasRef = useRef<() => void>(() => {});
   const panningRef = useRef<{ isPanning: boolean; startX: number; startY: number } | null>(null);
   const rightClickStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
@@ -349,7 +350,8 @@ export function CanvasRoot() {
             lastTime = now;
           }
           
-          renderCanvas();
+          // Use ref to always call the latest renderCanvas function
+          renderCanvasRef.current();
           updateParticles();
         });
       } catch (error) {
@@ -465,7 +467,10 @@ export function CanvasRoot() {
     // Render connections layer
     renderConnections(
       connectionLayer,
-      workspaces
+      workspaces,
+      wiring,
+      viewportRef.current,
+      containerRef.current?.getBoundingClientRect() || null
     );
 
     // Render nodes (workspaces)
@@ -473,12 +478,19 @@ export function CanvasRoot() {
       nodeLayer,
       workspaces,
       agents,
-      selectedWorkspaceId
+      selectedWorkspaceId,
+      viewportRef.current,
+      containerRef.current?.getBoundingClientRect() || null
     );
 
     // Render drawing preview
     renderDrawingPreview(nodeLayer, drawing);
-  }, [workspaces, drawing, selectedWorkspaceId, agents]);
+  }, [workspaces, drawing, selectedWorkspaceId, agents, wiring]);
+
+  // Update the ref whenever renderCanvas changes
+  useEffect(() => {
+    renderCanvasRef.current = renderCanvas;
+  }, [renderCanvas]);
 
   useEffect(() => {
     renderCanvas();
@@ -1105,11 +1117,20 @@ export function CanvasRoot() {
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
                     
-                    // Find any workspace we're hovering over
+                    // Convert screen coordinates to world coordinates
+                    let worldX = x;
+                    let worldY = y;
+                    if (viewportRef.current) {
+                      const world = viewportRef.current.screenToWorld(x, y);
+                      worldX = world.x;
+                      worldY = world.y;
+                    }
+                    
+                    // Find any workspace we're hovering over (using world coordinates)
                     const targetWorkspace = Object.values(workspaces).find((ws) => {
                       if (ws.id === wiring.fromWorkspaceId) return false;
-                      return x >= ws.x && x <= ws.x + ws.width &&
-                             y >= ws.y && y <= ws.y + ws.height;
+                      return worldX >= ws.x && worldX <= ws.x + ws.width &&
+                             worldY >= ws.y && worldY <= ws.y + ws.height;
                     });
 
                     if (targetWorkspace) {
@@ -1170,11 +1191,20 @@ export function CanvasRoot() {
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
                     
-                    // Find any workspace we're hovering over
+                    // Convert screen coordinates to world coordinates
+                    let worldX = x;
+                    let worldY = y;
+                    if (viewportRef.current) {
+                      const world = viewportRef.current.screenToWorld(x, y);
+                      worldX = world.x;
+                      worldY = world.y;
+                    }
+                    
+                    // Find any workspace we're hovering over (using world coordinates)
                     const targetWorkspace = Object.values(workspaces).find((ws) => {
                       if (ws.id === wiring.fromWorkspaceId) return false;
-                      return x >= ws.x && x <= ws.x + ws.width &&
-                             y >= ws.y && y <= ws.y + ws.height;
+                      return worldX >= ws.x && worldX <= ws.x + ws.width &&
+                             worldY >= ws.y && worldY <= ws.y + ws.height;
                     });
 
                     if (targetWorkspace) {
@@ -1409,150 +1439,6 @@ export function CanvasRoot() {
           </div>
         );
       })}
-
-      {/* Connection lines between workspaces - SVG overlay above cards */}
-      <svg
-        className="absolute inset-0 pointer-events-none"
-        style={{ zIndex: 25, overflow: 'visible' }}
-      >
-        <defs>
-          <marker id="arrowhead-connection" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
-            <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
-          </marker>
-          <marker id="arrowhead-connection-active" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
-            <polygon points="0 0, 10 4, 0 8" fill="#60a5fa" />
-          </marker>
-          <filter id="glow-connection">
-            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-            <feMerge>
-              <feMergeNode in="coloredBlur"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-        </defs>
-        {Object.values(workspaces).flatMap((fromWs) => {
-          return (fromWs.outputConnections || []).map((toId) => {
-            const toWs = workspaces[toId];
-            if (!toWs) return null;
-
-            // Convert world coordinates to screen coordinates for SVG connections
-            const fromScreen = viewportRef.current 
-              ? viewportRef.current.worldToScreen(fromWs.x + fromWs.width, fromWs.y + fromWs.height / 2)
-              : { x: fromWs.x + fromWs.width, y: fromWs.y + fromWs.height / 2 };
-            const toScreen = viewportRef.current
-              ? viewportRef.current.worldToScreen(toWs.x, toWs.y + toWs.height / 2)
-              : { x: toWs.x, y: toWs.y + toWs.height / 2 };
-            
-            const fromX = fromScreen.x;
-            const fromY = fromScreen.y;
-            const toX = toScreen.x;
-            const toY = toScreen.y;
-
-            const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
-            const isActive = fromWs.state === 'working' || toWs.state === 'working';
-
-            const pathD = `M ${fromX} ${fromY} C ${fromX + controlOffset} ${fromY}, ${toX - controlOffset} ${toY}, ${toX} ${toY}`;
-
-            return (
-              <g key={`${fromWs.id}-${toId}`}>
-                {/* Glow for active connections */}
-                {isActive && (
-                  <path
-                    d={pathD}
-                    fill="none"
-                    stroke="#60a5fa"
-                    strokeWidth="8"
-                    strokeOpacity="0.2"
-                    filter="url(#glow-connection)"
-                  />
-                )}
-                {/* Main connection line */}
-                <path
-                  d={pathD}
-                  fill="none"
-                  stroke="#60a5fa"
-                  strokeWidth={isActive ? "4" : "3"}
-                  strokeOpacity={isActive ? "1" : "0.6"}
-                  strokeLinecap="round"
-                  markerEnd="url(#arrowhead-connection)"
-                />
-                {/* Source dot */}
-                <circle cx={fromX} cy={fromY} r="6" fill="#60a5fa" />
-              </g>
-            );
-          }).filter(Boolean);
-        })}
-      </svg>
-
-      {/* Wiring line - ALWAYS visible when wiring */}
-      {wiring.isWiring && wiring.fromWorkspaceId && (() => {
-        const fromWs = workspaces[wiring.fromWorkspaceId];
-        if (!fromWs) return null;
-
-        // Calculate connection point in world coordinates
-        const fromWorldX = wiring.fromType === 'output' ? fromWs.x + fromWs.width : fromWs.x;
-        const fromWorldY = fromWs.y + fromWs.height / 2;
-        
-        // Convert to screen coordinates for SVG rendering
-        const fromScreen = viewportRef.current 
-          ? viewportRef.current.worldToScreen(fromWorldX, fromWorldY)
-          : { x: fromWorldX, y: fromWorldY };
-        
-        const fromX = fromScreen.x;
-        const fromY = fromScreen.y;
-
-        return (
-          <svg
-            className="absolute inset-0 pointer-events-none"
-            style={{ zIndex: 9999, overflow: 'visible' }}
-          >
-            <defs>
-              <marker id="arrowhead-active" markerWidth="12" markerHeight="9" refX="10" refY="4.5" orient="auto">
-                <polygon points="0 0, 12 4.5, 0 9" fill="#22d3ee" />
-              </marker>
-              <filter id="glow-active">
-                <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
-                <feMerge>
-                  <feMergeNode in="coloredBlur"/>
-                  <feMergeNode in="SourceGraphic"/>
-                </feMerge>
-              </filter>
-            </defs>
-            {/* Glow layer */}
-            <path
-              d={`M ${fromX} ${fromY} C ${fromX + (wiring.fromType === 'output' ? 80 : -80)} ${fromY}, ${wiring.mouseX + (wiring.fromType === 'output' ? -80 : 80)} ${wiring.mouseY}, ${wiring.mouseX} ${wiring.mouseY}`}
-              fill="none"
-              stroke="#22d3ee"
-              strokeWidth="8"
-              strokeOpacity="0.4"
-              filter="url(#glow-active)"
-            />
-            {/* Main line */}
-            <path
-              d={`M ${fromX} ${fromY} C ${fromX + (wiring.fromType === 'output' ? 80 : -80)} ${fromY}, ${wiring.mouseX + (wiring.fromType === 'output' ? -80 : 80)} ${wiring.mouseY}, ${wiring.mouseX} ${wiring.mouseY}`}
-              fill="none"
-              stroke="#22d3ee"
-              strokeWidth="5"
-              strokeLinecap="round"
-              markerEnd="url(#arrowhead-active)"
-            />
-            {/* Animated dots */}
-            <circle r="6" fill="#22d3ee">
-              <animateMotion
-                dur="0.8s"
-                repeatCount="indefinite"
-                path={`M ${fromX} ${fromY} C ${fromX + (wiring.fromType === 'output' ? 80 : -80)} ${fromY}, ${wiring.mouseX + (wiring.fromType === 'output' ? -80 : 80)} ${wiring.mouseY}, ${wiring.mouseX} ${wiring.mouseY}`}
-              />
-            </circle>
-            {/* Start point */}
-            <circle cx={fromX} cy={fromY} r="8" fill="#22d3ee" />
-            {/* End point */}
-            <circle cx={wiring.mouseX} cy={wiring.mouseY} r="10" fill="#22d3ee" fillOpacity="0.6">
-              <animate attributeName="r" values="10;14;10" dur="0.5s" repeatCount="indefinite" />
-            </circle>
-          </svg>
-        );
-      })()}
 
       {/* Wiring mode indicator */}
       {wiring.isWiring && (

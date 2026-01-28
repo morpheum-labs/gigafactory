@@ -4,7 +4,7 @@ import { immer } from 'zustand/middleware/immer';
 export type ActivePanel = 'list' | 'workspace' | 'agent' | 'skills' | 'logs';
 
 // Wiring state for drag-to-connect
-interface WiringState {
+export interface WiringState {
   isWiring: boolean;
   fromWorkspaceId: string | null;
   fromType: 'input' | 'output' | null;

@@ -47,23 +47,28 @@ export function renderGrid(
     // Viewport-aware rendering - only render visible grid
     const bounds = calculateVisibleBounds(viewport, containerRect);
     const gridBounds = calculateGridBounds(bounds, gridSize);
+    const viewportState = viewport.getState();
+    const scale = viewportState.scale;
 
     const { startX, startY, endX, endY } = gridBounds;
 
-    // Draw minor grid lines
-    graphics.setStrokeStyle({ width: 1, color: minorColor, alpha: minorAlpha });
-    for (let x = startX; x <= endX; x += gridSize) {
-      graphics.moveTo(x, startY);
-      graphics.lineTo(x, endY);
-      graphics.stroke();
-    }
-    for (let y = startY; y <= endY; y += gridSize) {
-      graphics.moveTo(startX, y);
-      graphics.lineTo(endX, y);
-      graphics.stroke();
+    // Only draw minor grid lines when zoomed in enough (scale > 0.2)
+    // When very zoomed out, minor lines become too dense and cause lag
+    if (scale > 0.2) {
+      graphics.setStrokeStyle({ width: 1, color: minorColor, alpha: minorAlpha });
+      for (let x = startX; x <= endX; x += gridSize) {
+        graphics.moveTo(x, startY);
+        graphics.lineTo(x, endY);
+        graphics.stroke();
+      }
+      for (let y = startY; y <= endY; y += gridSize) {
+        graphics.moveTo(startX, y);
+        graphics.lineTo(endX, y);
+        graphics.stroke();
+      }
     }
 
-    // Draw major grid lines
+    // Draw major grid lines (always visible)
     graphics.setStrokeStyle({ width: 1.5, color: majorColor, alpha: majorAlpha });
     const majorStartX = Math.floor(startX / majorSize) * majorSize;
     const majorStartY = Math.floor(startY / majorSize) * majorSize;
@@ -78,12 +83,15 @@ export function renderGrid(
       graphics.stroke();
     }
 
-    // Draw grid dots at intersections
-    graphics.setFillStyle({ color: dotColor, alpha: dotAlpha });
-    for (let x = startX; x <= endX; x += gridSize) {
-      for (let y = startY; y <= endY; y += gridSize) {
-        graphics.circle(x, y, 1.5);
-        graphics.fill();
+    // Only draw grid dots when zoomed in enough (scale > 0.3)
+    // Grid dots are expensive (O(n²)) and cause severe lag when zoomed out
+    if (scale > 0.3) {
+      graphics.setFillStyle({ color: dotColor, alpha: dotAlpha });
+      for (let x = startX; x <= endX; x += gridSize) {
+        for (let y = startY; y <= endY; y += gridSize) {
+          graphics.circle(x, y, 1.5);
+          graphics.fill();
+        }
       }
     }
   } else {
