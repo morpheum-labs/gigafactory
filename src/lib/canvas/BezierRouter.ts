@@ -28,9 +28,9 @@ export interface BezierRoute {
 
 // Configuration constants
 const MIN_CLEARANCE = 30; // Minimum distance from workspaces (increased for better visual clearance)
-const MAX_BEZIER_ORDER = 10; // Maximum control points (order + 1)
 const COLLISION_SAMPLES = 80; // Samples for collision detection (increased for better edge case detection)
 const OPTIMIZATION_ITERATIONS = 30; // Max iterations for gradient descent (increased for better optimization)
+const BEZIER_ORDER = 3; // Cubic Bézier (4 control points: start, cp1, cp2, end)
 
 /**
  * Convert workspace to bounds for collision detection
@@ -294,17 +294,15 @@ function calculateRouteCost(
 }
 
 /**
- * Generate initial control points for backward routing
+ * Generate initial control points for backward routing (cubic Bézier)
  * Uses safe directions to avoid workspaces
+ * Returns 4 control points: [start, cp1, cp2, end]
  */
 function generateInitialControlPoints(
   start: Point,
   destination: Point,
-  workspaces: WorkspaceBounds[],
-  order: number
+  workspaces: WorkspaceBounds[]
 ): Point[] {
-  const points: Point[] = [start];
-  
   // Calculate safe initial direction from destination
   const dx = destination.x - start.x;
   const dy = destination.y - start.y;
@@ -336,28 +334,27 @@ function generateInitialControlPoints(
     }
   }
   
-  // Generate intermediate control points with minimum clearance consideration
-  // Ensure we start with at least MIN_CLEARANCE * 1.5 to give A* room to optimize
-  const baseOffset = Math.max(100, Math.abs(dx) * 0.4, MIN_CLEARANCE * 1.5);
+  // Generate cubic Bézier control points with minimum clearance consideration
+  const baseOffset = Math.max(
+    100, 
+    Math.abs(dx) * 0.4, 
+    MIN_CLEARANCE * 1.5
+  );
   const verticalOffset = bestDirection * baseOffset;
   
-  for (let i = 1; i < order; i++) {
-    const t = i / order;
-    const baseX = start.x + dx * t;
-    const baseY = start.y + dy * t;
-    
-    // Apply vertical offset with easing (stronger in middle)
-    const ease = Math.sin(t * Math.PI); // Ease in/out
-    const offsetY = verticalOffset * ease;
-    
-    points.push({
-      x: baseX,
-      y: baseY + offsetY,
-    });
-  }
+  // Cubic Bézier: start, cp1, cp2, end
+  // Position control points at 1/3 and 2/3 of the way
+  const cp1X = start.x + dx * 0.33;
+  const cp1Y = start.y + dy * 0.33 + verticalOffset * 0.7; // Ease in
+  const cp2X = start.x + dx * 0.67;
+  const cp2Y = start.y + dy * 0.67 + verticalOffset * 0.7; // Ease out
   
-  points.push(destination);
-  return points;
+  return [
+    start,
+    { x: cp1X, y: cp1Y },
+    { x: cp2X, y: cp2Y },
+    destination
+  ];
 }
 
 /**
@@ -390,8 +387,8 @@ function generateNeighbors(
         y: controlPoints[i].y + dir.y,
       };
       
-      // Only add if it doesn't immediately collide
-      if (!curveCollides(newPoints, workspaces, 20)) {
+      // Only add if it doesn't collide (use full sample count for accuracy)
+      if (!curveCollides(newPoints, workspaces, COLLISION_SAMPLES)) {
         neighbors.push(newPoints);
       }
     }
@@ -469,13 +466,12 @@ function optimizeControlPoints(
 }
 
 /**
- * A*-inspired search for optimal Bézier route
+ * A*-inspired search for optimal cubic Bézier route
  */
 function aStarBezierSearch(
   start: Point,
   destination: Point,
-  workspaces: WorkspaceBounds[],
-  maxOrder: number = MAX_BEZIER_ORDER
+  workspaces: WorkspaceBounds[]
 ): BezierRoute | null {
   // Priority queue simulation using array + sort
   interface SearchNode {
@@ -488,45 +484,44 @@ function aStarBezierSearch(
   const openSet: SearchNode[] = [];
   const closedSet = new Set<string>();
   
-  // Initialize with different curve orders
-  for (let order = 3; order <= maxOrder; order++) {
-    const initialPoints = generateInitialControlPoints(
-      start,
-      destination,
-      workspaces,
-      order
-    );
-    
-    if (!curveCollides(initialPoints, workspaces)) {
-      const { cost } = calculateRouteCost(
-        initialPoints,
-        workspaces,
-        destination
-      );
-      
-      openSet.push({
-        controlPoints: initialPoints,
-        g: cost,
-        h: 0,
-        f: cost,
-      });
-    }
+  // Initialize with cubic Bézier (4 control points)
+  const initialPoints = generateInitialControlPoints(
+    start,
+    destination,
+    workspaces
+  );
+  
+  const collides = curveCollides(initialPoints, workspaces);
+  const { cost } = calculateRouteCost(
+    initialPoints,
+    workspaces,
+    destination
+  );
+  
+  if (!collides) {
+    // Non-colliding initial path - add with normal cost
+    openSet.push({
+      controlPoints: initialPoints,
+      g: cost,
+      h: 0,
+      f: cost,
+    });
+  } else {
+    // Even if initial points collide, add with high penalty
+    // This allows the algorithm to optimize them into valid paths
+    const collisionPenalty = 10000;
+    openSet.push({
+      controlPoints: initialPoints,
+      g: cost + collisionPenalty,
+      h: collisionPenalty,
+      f: cost + collisionPenalty * 2,
+    });
   }
   
+  // If we still have no valid starting points, the initial generation failed
+  // This shouldn't happen often, but if it does, return null
   if (openSet.length === 0) {
-    // Fallback: try with lower order
-    const fallbackPoints = generateInitialControlPoints(
-      start,
-      destination,
-      workspaces,
-      3
-    );
-    return {
-      controlPoints: fallbackPoints,
-      order: 3,
-      cost: calculateRouteCost(fallbackPoints, workspaces, destination).cost,
-      clearance: calculateClearance(fallbackPoints, workspaces),
-    };
+    return null;
   }
   
   // Sort by f-cost (A* priority)
@@ -555,7 +550,7 @@ function aStarBezierSearch(
       // Valid solution found
       return {
         controlPoints: current.controlPoints,
-        order: current.controlPoints.length - 1,
+        order: BEZIER_ORDER,
         cost: current.f,
         clearance,
       };
@@ -581,6 +576,11 @@ function aStarBezierSearch(
       
       if (closedSet.has(neighborKey)) continue;
       
+      // Double-check collision before adding (generateNeighbors already checks, but be extra safe)
+      if (curveCollides(neighborPoints, workspaces)) {
+        continue; // Skip colliding neighbors
+      }
+      
       const { cost, clearance: neighborClearance } = calculateRouteCost(
         neighborPoints,
         workspaces,
@@ -604,8 +604,62 @@ function aStarBezierSearch(
     openSet.sort((a, b) => a.f - b.f);
   }
   
-  // Return best solution found, or optimize it further
+  // Return best solution found, but ONLY if it doesn't collide and has reasonable clearance
   if (bestSolution) {
+    // Verify best solution doesn't collide
+    if (curveCollides(bestSolution.controlPoints, workspaces)) {
+      // Best solution still collides - try optimization to fix it
+      const optimized = optimizeControlPoints(
+        bestSolution.controlPoints,
+        workspaces,
+        destination,
+        20
+      );
+      
+      // Check if optimization fixed the collision
+      if (!curveCollides(optimized, workspaces)) {
+        const clearance = calculateClearance(optimized, workspaces);
+        // Only return if clearance is reasonable (at least 50% of minimum)
+        if (clearance >= MIN_CLEARANCE * 0.5) {
+          return {
+            controlPoints: optimized,
+            order: BEZIER_ORDER,
+            cost: calculateRouteCost(optimized, workspaces, destination).cost,
+            clearance,
+          };
+        }
+      }
+      // If optimization didn't help, return null (no valid path found)
+      return null;
+    }
+    
+    // Best solution doesn't collide, but check clearance
+    const clearance = calculateClearance(bestSolution.controlPoints, workspaces);
+    if (clearance < MIN_CLEARANCE * 0.5) {
+      // Clearance too low, try optimization
+      const optimized = optimizeControlPoints(
+        bestSolution.controlPoints,
+        workspaces,
+        destination,
+        20
+      );
+      
+      if (!curveCollides(optimized, workspaces)) {
+        const optimizedClearance = calculateClearance(optimized, workspaces);
+        if (optimizedClearance >= MIN_CLEARANCE * 0.5) {
+          return {
+            controlPoints: optimized,
+            order: BEZIER_ORDER,
+            cost: calculateRouteCost(optimized, workspaces, destination).cost,
+            clearance: optimizedClearance,
+          };
+        }
+      }
+      // Still not good enough
+      return null;
+    }
+    
+    // Best solution is good, optimize it further
     const optimized = optimizeControlPoints(
       bestSolution.controlPoints,
       workspaces,
@@ -613,11 +667,23 @@ function aStarBezierSearch(
       10
     );
     
+    // Verify optimization didn't introduce collisions
+    if (!curveCollides(optimized, workspaces)) {
+      const optimizedClearance = calculateClearance(optimized, workspaces);
+      return {
+        controlPoints: optimized,
+        order: BEZIER_ORDER,
+        cost: calculateRouteCost(optimized, workspaces, destination).cost,
+        clearance: optimizedClearance,
+      };
+    }
+    
+    // Optimization introduced collision, return original
     return {
-      controlPoints: optimized,
-      order: optimized.length - 1,
-      cost: calculateRouteCost(optimized, workspaces, destination).cost,
-      clearance: calculateClearance(optimized, workspaces),
+      controlPoints: bestSolution.controlPoints,
+      order: BEZIER_ORDER,
+      cost: bestSolution.f,
+      clearance,
     };
   }
   
@@ -647,40 +713,42 @@ export function routeBezierCurve(
 }
 
 /**
- * Convert higher-order Bézier to cubic segments for rendering
- * PixiJS only supports cubic Bézier, so we approximate
+ * Convert cubic Bézier control points to rendering format
+ * Since we only use cubic Bézier, this is a simple conversion
  */
 export function bezierToCubicSegments(
   controlPoints: Point[]
 ): Array<{ cp1: Point; cp2: Point; end: Point }> {
-  if (controlPoints.length <= 4) {
-    // Already cubic or lower, return as single segment
-    if (controlPoints.length === 4) {
-      return [{
-        cp1: controlPoints[1],
-        cp2: controlPoints[2],
-        end: controlPoints[3],
-      }];
-    }
-    // Quadratic or linear - approximate as cubic
-    if (controlPoints.length === 3) {
-      const p0 = controlPoints[0];
-      const p1 = controlPoints[1];
-      const p2 = controlPoints[2];
-      // Convert quadratic to cubic
-      return [{
-        cp1: {
-          x: p0.x + (2/3) * (p1.x - p0.x),
-          y: p0.y + (2/3) * (p1.y - p0.y),
-        },
-        cp2: {
-          x: p2.x + (2/3) * (p1.x - p2.x),
-          y: p2.y + (2/3) * (p1.y - p2.y),
-        },
-        end: p2,
-      }];
-    }
-    // Linear
+  // We always use cubic Bézier (4 control points)
+  if (controlPoints.length === 4) {
+    return [{
+      cp1: controlPoints[1],
+      cp2: controlPoints[2],
+      end: controlPoints[3],
+    }];
+  }
+  
+  // Fallback for edge cases (shouldn't happen, but handle gracefully)
+  if (controlPoints.length === 3) {
+    // Quadratic - approximate as cubic
+    const p0 = controlPoints[0];
+    const p1 = controlPoints[1];
+    const p2 = controlPoints[2];
+    return [{
+      cp1: {
+        x: p0.x + (2/3) * (p1.x - p0.x),
+        y: p0.y + (2/3) * (p1.y - p0.y),
+      },
+      cp2: {
+        x: p2.x + (2/3) * (p1.x - p2.x),
+        y: p2.y + (2/3) * (p1.y - p2.y),
+      },
+      end: p2,
+    }];
+  }
+  
+  if (controlPoints.length === 2) {
+    // Linear - approximate as cubic
     const mid = {
       x: (controlPoints[0].x + controlPoints[1].x) / 2,
       y: (controlPoints[0].y + controlPoints[1].y) / 2,
@@ -692,48 +760,6 @@ export function bezierToCubicSegments(
     }];
   }
   
-  // Higher order: split into multiple cubic segments
-  // Use de Casteljau subdivision
-  const segments: Array<{ cp1: Point; cp2: Point; end: Point }> = [];
-  const numSegments = Math.ceil((controlPoints.length - 1) / 3);
-  
-  for (let seg = 0; seg < numSegments; seg++) {
-    const t0 = seg / numSegments;
-    const t1 = (seg + 1) / numSegments;
-    
-    // Evaluate curve at segment boundaries
-    const startPt = evaluateBezier(controlPoints, t0);
-    const endPt = evaluateBezier(controlPoints, t1);
-    
-    // Approximate control points for this segment
-    // Use tangent directions
-    const dt = 0.01;
-    const tangentStart = {
-      x: (evaluateBezier(controlPoints, t0 + dt).x - startPt.x) / dt,
-      y: (evaluateBezier(controlPoints, t0 + dt).y - startPt.y) / dt,
-    };
-    const tangentEnd = {
-      x: (endPt.x - evaluateBezier(controlPoints, t1 - dt).x) / dt,
-      y: (endPt.y - evaluateBezier(controlPoints, t1 - dt).y) / dt,
-    };
-    
-    const segmentLength = Math.sqrt(
-      (endPt.x - startPt.x) ** 2 + (endPt.y - startPt.y) ** 2
-    );
-    const controlLength = segmentLength / 3;
-    
-    segments.push({
-      cp1: {
-        x: startPt.x + tangentStart.x * controlLength,
-        y: startPt.y + tangentStart.y * controlLength,
-      },
-      cp2: {
-        x: endPt.x - tangentEnd.x * controlLength,
-        y: endPt.y - tangentEnd.y * controlLength,
-      },
-      end: endPt,
-    });
-  }
-  
-  return segments;
+  // Invalid - return empty array
+  return [];
 }
