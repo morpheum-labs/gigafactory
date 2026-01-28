@@ -27,10 +27,10 @@ export interface BezierRoute {
 }
 
 // Configuration constants
-const MIN_CLEARANCE = 20; // Minimum distance from workspaces
-const MAX_BEZIER_ORDER = 6; // Maximum control points (order + 1)
-const COLLISION_SAMPLES = 50; // Samples for collision detection
-const OPTIMIZATION_ITERATIONS = 20; // Max iterations for gradient descent
+const MIN_CLEARANCE = 30; // Minimum distance from workspaces (increased for better visual clearance)
+const MAX_BEZIER_ORDER = 10; // Maximum control points (order + 1)
+const COLLISION_SAMPLES = 80; // Samples for collision detection (increased for better edge case detection)
+const OPTIMIZATION_ITERATIONS = 30; // Max iterations for gradient descent (increased for better optimization)
 
 /**
  * Convert workspace to bounds for collision detection
@@ -62,8 +62,20 @@ function pointInBounds(point: Point, bounds: WorkspaceBounds): boolean {
  * Calculate distance from point to rectangle (0 if inside)
  */
 function distanceToRectangle(point: Point, bounds: WorkspaceBounds): number {
-  const dx = Math.max(bounds.x - point.x, 0, point.x - bounds.right);
-  const dy = Math.max(bounds.y - point.y, 0, point.y - bounds.bottom);
+  // Calculate horizontal distance: 0 if inside, otherwise distance to nearest edge
+  const dx = point.x < bounds.x 
+    ? bounds.x - point.x 
+    : point.x > bounds.right 
+      ? point.x - bounds.right 
+      : 0;
+  
+  // Calculate vertical distance: 0 if inside, otherwise distance to nearest edge
+  const dy = point.y < bounds.y 
+    ? bounds.y - point.y 
+    : point.y > bounds.bottom 
+      ? point.y - bounds.bottom 
+      : 0;
+  
   return Math.sqrt(dx * dx + dy * dy);
 }
 
@@ -114,6 +126,7 @@ function bezierLength(controlPoints: Point[], samples: number = 20): number {
 
 /**
  * Check if Bézier curve collides with any workspace
+ * A curve "collides" if any point is inside a workspace OR within MIN_CLEARANCE distance
  */
 function curveCollides(
   controlPoints: Point[],
@@ -122,19 +135,34 @@ function curveCollides(
 ): boolean {
   if (controlPoints.length < 2) return false;
 
-  // Fast bounding box check first
+  // Fast bounding box check first (expand bbox by MIN_CLEARANCE for safety)
   const bbox = bezierBoundingBox(controlPoints);
-  if (!bboxIntersectsAny(bbox, workspaces)) {
+  const expandedBbox: WorkspaceBounds = {
+    x: bbox.x - MIN_CLEARANCE,
+    y: bbox.y - MIN_CLEARANCE,
+    width: bbox.width + 2 * MIN_CLEARANCE,
+    height: bbox.height + 2 * MIN_CLEARANCE,
+    right: bbox.right + MIN_CLEARANCE,
+    bottom: bbox.bottom + MIN_CLEARANCE,
+  };
+  if (!bboxIntersectsAny(expandedBbox, workspaces)) {
     return false;
   }
 
-  // Detailed sampling check
+  // Detailed sampling check - check both inside bounds AND minimum clearance
   for (let i = 0; i <= samples; i++) {
     const t = i / samples;
     const point = evaluateBezier(controlPoints, t);
     
     for (const ws of workspaces) {
+      // Check if point is inside workspace
       if (pointInBounds(point, ws)) {
+        return true;
+      }
+      
+      // Check if point is within MIN_CLEARANCE distance from workspace
+      const distance = distanceToRectangle(point, ws);
+      if (distance < MIN_CLEARANCE) {
         return true;
       }
     }
@@ -286,25 +314,32 @@ function generateInitialControlPoints(
   let bestDirection = 0; // -1 for up, 1 for down, 0 for neutral
   let maxClearance = 0;
   
-  // Test upward and downward curves
+  // Test upward and downward curves with multiple test points
   for (const dir of [-1, 1]) {
-    const testY = start.y + dir * Math.max(100, Math.abs(dx) * 0.3);
-    const testPoint: Point = { x: start.x + dx * 0.3, y: testY };
-    
-    let minDist = Infinity;
-    for (const ws of workspaces) {
-      const dist = distanceToRectangle(testPoint, ws);
-      minDist = Math.min(minDist, dist);
+    // Test at multiple horizontal positions to find best overall clearance
+    let minDistForDirection = Infinity;
+    for (let t = 0.2; t <= 0.5; t += 0.1) {
+      const testY = start.y + dir * Math.max(100, Math.abs(dx) * 0.3);
+      const testPoint: Point = { x: start.x + dx * t, y: testY };
+      
+      let minDist = Infinity;
+      for (const ws of workspaces) {
+        const dist = distanceToRectangle(testPoint, ws);
+        minDist = Math.min(minDist, dist);
+      }
+      minDistForDirection = Math.min(minDistForDirection, minDist);
     }
     
-    if (minDist > maxClearance) {
-      maxClearance = minDist;
+    if (minDistForDirection > maxClearance) {
+      maxClearance = minDistForDirection;
       bestDirection = dir;
     }
   }
   
-  // Generate intermediate control points
-  const verticalOffset = bestDirection * Math.max(100, Math.abs(dx) * 0.4);
+  // Generate intermediate control points with minimum clearance consideration
+  // Ensure we start with at least MIN_CLEARANCE * 1.5 to give A* room to optimize
+  const baseOffset = Math.max(100, Math.abs(dx) * 0.4, MIN_CLEARANCE * 1.5);
+  const verticalOffset = bestDirection * baseOffset;
   
   for (let i = 1; i < order; i++) {
     const t = i / order;
