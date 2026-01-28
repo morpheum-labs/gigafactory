@@ -14,7 +14,7 @@ src-tauri/target/
 *.swp
 *.swo
 *~
-target/
+
 
 # OS
 .DS_Store
@@ -36,7 +36,4 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
-target/flycheck0/stderr
-target/flycheck0/stdout
-target/flycheck0/stderr
-target/flycheck0/stdout
+
