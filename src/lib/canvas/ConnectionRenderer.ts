@@ -8,6 +8,7 @@ import type { Workspace } from '../../types/workspace';
 import type { ViewportController } from './ViewportController';
 import type { WiringState } from '../../stores/ui';
 import { calculateVisibleBounds, isPointVisible } from './CanvasUtils';
+import { routeBezierCurve, bezierToCubicSegments, type Point } from './BezierRouter';
 
 export interface ConnectionRendererOptions {
   lineColor?: number;
@@ -83,48 +84,163 @@ export function renderConnections(
       }
 
       // Calculate bezier control offset in world space
-      const controlOffset = Math.min(100, Math.abs(toX - fromX) / 2);
+      const horizontalDistance = toX - fromX;
+      const isBackward = horizontalDistance < 0; // Target is to the left of source
+      
       const isActive = fromWs.state === 'working' || toWs.state === 'working';
 
       // Calculate where the line should end (just before the arrow base)
       // The arrow tip is at toX, and the base is at toX - arrowSize
       const lineEndX = toX - arrowSize;
+      const lineEndY = toY;
 
-      // Draw active glow
-      if (isActive) {
+      // Use optimized Bézier routing for backward connections or when workspaces need avoidance
+      let useOptimizedRouting = isBackward;
+      
+      // For backward routing, use the A*-inspired router
+      if (useOptimizedRouting) {
+        const start: Point = { x: fromX, y: fromY };
+        const destination: Point = { x: lineEndX, y: lineEndY };
+        
+        const route = routeBezierCurve(
+          start,
+          destination,
+          workspaces,
+          [fromWs.id, toWs.id] // Exclude source and destination workspaces
+        );
+        
+        if (route && route.controlPoints.length > 0) {
+          // Convert higher-order Bézier to cubic segments for rendering
+          const segments = bezierToCubicSegments(route.controlPoints);
+          
+          // Draw active glow
+          if (isActive) {
+            graphics.setStrokeStyle({
+              width: activeGlowWidth,
+              color: lineColor,
+              alpha: activeGlowAlpha,
+            });
+            graphics.moveTo(fromX, fromY);
+            for (const segment of segments) {
+              graphics.bezierCurveTo(
+                segment.cp1.x,
+                segment.cp1.y,
+                segment.cp2.x,
+                segment.cp2.y,
+                segment.end.x,
+                segment.end.y
+              );
+            }
+            graphics.stroke();
+          }
+
+          // Draw connection line
+          graphics.setStrokeStyle({
+            width: lineWidth,
+            color: lineColor,
+            alpha: isActive ? 1 : lineAlpha,
+          });
+          graphics.moveTo(fromX, fromY);
+          for (const segment of segments) {
+            graphics.bezierCurveTo(
+              segment.cp1.x,
+              segment.cp1.y,
+              segment.cp2.x,
+              segment.cp2.y,
+              segment.end.x,
+              segment.end.y
+            );
+          }
+          graphics.stroke();
+        } else {
+          // Fallback to simple routing if optimization fails
+          const maxHeight = Math.max(fromWs.height, toWs.height);
+          const verticalOffset = maxHeight * 0.8;
+          const midY = (fromY + toY) / 2;
+          const curveUp = fromY > midY || toY > midY;
+          const curveY = curveUp 
+            ? Math.min(fromY, toY) - verticalOffset
+            : Math.max(fromY, toY) + verticalOffset;
+          const horizontalOffset = Math.max(80, Math.abs(horizontalDistance) * 0.3);
+          
+          if (isActive) {
+            graphics.setStrokeStyle({
+              width: activeGlowWidth,
+              color: lineColor,
+              alpha: activeGlowAlpha,
+            });
+            graphics.moveTo(fromX, fromY);
+            graphics.bezierCurveTo(
+              fromX + horizontalOffset,
+              curveY,
+              lineEndX - horizontalOffset,
+              curveY,
+              lineEndX,
+              lineEndY
+            );
+            graphics.stroke();
+          }
+
+          graphics.setStrokeStyle({
+            width: lineWidth,
+            color: lineColor,
+            alpha: isActive ? 1 : lineAlpha,
+          });
+          graphics.moveTo(fromX, fromY);
+          graphics.bezierCurveTo(
+            fromX + horizontalOffset,
+            curveY,
+            lineEndX - horizontalOffset,
+            curveY,
+            lineEndX,
+            lineEndY
+          );
+          graphics.stroke();
+        }
+      } else {
+        // Normal forward routing (simple cubic Bézier)
+        const controlOffset = Math.min(100, Math.abs(horizontalDistance) / 2);
+        const control1X = fromX + controlOffset;
+        const control1Y = fromY;
+        const control2X = lineEndX - controlOffset;
+        const control2Y = lineEndY;
+
+        // Draw active glow
+        if (isActive) {
+          graphics.setStrokeStyle({
+            width: activeGlowWidth,
+            color: lineColor,
+            alpha: activeGlowAlpha,
+          });
+          graphics.moveTo(fromX, fromY);
+          graphics.bezierCurveTo(
+            control1X,
+            control1Y,
+            control2X,
+            control2Y,
+            lineEndX,
+            lineEndY
+          );
+          graphics.stroke();
+        }
+
+        // Draw connection line
         graphics.setStrokeStyle({
-          width: activeGlowWidth,
+          width: lineWidth,
           color: lineColor,
-          alpha: activeGlowAlpha,
+          alpha: isActive ? 1 : lineAlpha,
         });
         graphics.moveTo(fromX, fromY);
         graphics.bezierCurveTo(
-          fromX + controlOffset,
-          fromY,
-          lineEndX - controlOffset,
-          toY,
+          control1X,
+          control1Y,
+          control2X,
+          control2Y,
           lineEndX,
-          toY
+          lineEndY
         );
         graphics.stroke();
       }
-
-      // Draw connection line (ends just before arrow base, so arrow tip is visible)
-      graphics.setStrokeStyle({
-        width: lineWidth,
-        color: lineColor,
-        alpha: isActive ? 1 : lineAlpha,
-      });
-      graphics.moveTo(fromX, fromY);
-      graphics.bezierCurveTo(
-        fromX + controlOffset,
-        fromY,
-        lineEndX - controlOffset,
-        toY,
-        lineEndX,
-        toY
-      );
-      graphics.stroke();
 
       // Draw arrow (tip at toX, base at toX - arrowSize)
       graphics.setFillStyle({ color: lineColor, alpha: 0.9 });
@@ -154,42 +270,125 @@ export function renderConnections(
         : fromWs.x;
       const fromY = fromWs.y + fromWs.height / 2;
       
-      const controlOffset = wiring.fromType === 'output' ? 80 : -80;
+      // Calculate bezier control points for wiring preview
+      const horizontalDistance = worldMouse.x - fromX;
+      const isBackward = (wiring.fromType === 'output' && horizontalDistance < 0) || 
+                         (wiring.fromType === 'input' && horizontalDistance > 0);
+      
       const wiringColor = 0x22d3ee; // cyan
       
-      // Draw glow layer
-      graphics.setStrokeStyle({
-        width: 8,
-        color: wiringColor,
-        alpha: 0.4,
-      });
-      graphics.moveTo(fromX, fromY);
-      graphics.bezierCurveTo(
-        fromX + controlOffset,
-        fromY,
-        worldMouse.x + (wiring.fromType === 'output' ? -80 : 80),
-        worldMouse.y,
-        worldMouse.x,
-        worldMouse.y
-      );
-      graphics.stroke();
-      
-      // Draw main wiring line
-      graphics.setStrokeStyle({
-        width: 5,
-        color: wiringColor,
-        alpha: 1,
-      });
-      graphics.moveTo(fromX, fromY);
-      graphics.bezierCurveTo(
-        fromX + controlOffset,
-        fromY,
-        worldMouse.x + (wiring.fromType === 'output' ? -80 : 80),
-        worldMouse.y,
-        worldMouse.x,
-        worldMouse.y
-      );
-      graphics.stroke();
+      // Use optimized routing for backward wiring preview
+      if (isBackward) {
+        const start: Point = { x: fromX, y: fromY };
+        const destination: Point = { x: worldMouse.x, y: worldMouse.y };
+        
+        const route = routeBezierCurve(
+          start,
+          destination,
+          workspaces,
+          [fromWs.id] // Exclude source workspace
+        );
+        
+        if (route && route.controlPoints.length > 0) {
+          const segments = bezierToCubicSegments(route.controlPoints);
+          
+          // Draw glow layer
+          graphics.setStrokeStyle({
+            width: 8,
+            color: wiringColor,
+            alpha: 0.4,
+          });
+          graphics.moveTo(fromX, fromY);
+          for (const segment of segments) {
+            graphics.bezierCurveTo(
+              segment.cp1.x,
+              segment.cp1.y,
+              segment.cp2.x,
+              segment.cp2.y,
+              segment.end.x,
+              segment.end.y
+            );
+          }
+          graphics.stroke();
+          
+          // Draw main wiring line
+          graphics.setStrokeStyle({
+            width: 5,
+            color: wiringColor,
+            alpha: 1,
+          });
+          graphics.moveTo(fromX, fromY);
+          for (const segment of segments) {
+            graphics.bezierCurveTo(
+              segment.cp1.x,
+              segment.cp1.y,
+              segment.cp2.x,
+              segment.cp2.y,
+              segment.end.x,
+              segment.end.y
+            );
+          }
+          graphics.stroke();
+        } else {
+          // Fallback to simple routing
+          const verticalOffset = fromWs.height * 0.8;
+          const curveY = fromY - verticalOffset;
+          const horizontalOffset = Math.max(80, Math.abs(horizontalDistance) * 0.3);
+          const control1X = wiring.fromType === 'output' 
+            ? fromX + horizontalOffset 
+            : fromX - horizontalOffset;
+          const control1Y = curveY;
+          const control2X = wiring.fromType === 'output'
+            ? worldMouse.x - horizontalOffset
+            : worldMouse.x + horizontalOffset;
+          const control2Y = curveY;
+          
+          graphics.setStrokeStyle({
+            width: 8,
+            color: wiringColor,
+            alpha: 0.4,
+          });
+          graphics.moveTo(fromX, fromY);
+          graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
+          graphics.stroke();
+          
+          graphics.setStrokeStyle({
+            width: 5,
+            color: wiringColor,
+            alpha: 1,
+          });
+          graphics.moveTo(fromX, fromY);
+          graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
+          graphics.stroke();
+        }
+      } else {
+        // Normal forward routing
+        const controlOffset = wiring.fromType === 'output' ? 80 : -80;
+        const control1X = fromX + controlOffset;
+        const control1Y = fromY;
+        const control2X = worldMouse.x + (wiring.fromType === 'output' ? -80 : 80);
+        const control2Y = worldMouse.y;
+        
+        // Draw glow layer
+        graphics.setStrokeStyle({
+          width: 8,
+          color: wiringColor,
+          alpha: 0.4,
+        });
+        graphics.moveTo(fromX, fromY);
+        graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
+        graphics.stroke();
+        
+        // Draw main wiring line
+        graphics.setStrokeStyle({
+          width: 5,
+          color: wiringColor,
+          alpha: 1,
+        });
+        graphics.moveTo(fromX, fromY);
+        graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
+        graphics.stroke();
+      }
       
       // Draw arrow at end
       graphics.setFillStyle({ color: wiringColor, alpha: 1 });
