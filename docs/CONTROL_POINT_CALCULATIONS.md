@@ -4,6 +4,7 @@
 - `ELBOW_CURVE_RADIUS = 30` (px)
 - `ELBOW_SMOOTHNESS = 0.3`
 - `tangentOffset = fixedRadius * 0.6 = 30 * 0.6 = 18` (px) - **FIXED for all elbows**
+- `perpendicularOffset = fixedRadius * ELBOW_SMOOTHNESS = 30 * 0.3 = 9` (px) - **CONSISTENT for all elbows (no smoothness enhancement)**
 
 ## Waypoint Structure (Backward Connections)
 ```
@@ -16,23 +17,25 @@
 
 ## Control Point Calculations Table
 
-| Segment | Type | Elbow | p1 | p2 | Direction | smoothnessFactor | perpendicularOffset | tangentOffset | cp1 Calculation | cp2 Calculation | Tangent Angle (cp1→p1) | Tangent Angle (cp2→p2) |
-|---------|------|-------|----|----|-----------|-------------------|---------------------|---------------|-----------------|-----------------|------------------------|------------------------|
-| **0** | Horizontal | - | `source` | `rightExtend` | RIGHT | `ELBOW_SMOOTHNESS = 0.3` | `30 * 0.3 = 9` | `18` | `x: p1.x + 18`<br>`y: p1.y ± 9` | `x: p2.x - 18`<br>`y: p2.y ± 9` | `≈ 0°` (near horizontal) | `≈ 0°` (near horizontal) |
-| **1** | Vertical | - | `rightExtend` | `verticalOverreach` | UP/DOWN | `ELBOW_SMOOTHNESS = 0.3` | `30 * 0.3 = 9` | `18` | `x: p1.x ± 9`<br>`y: p1.y + 18` (down) or `-18` (up) | `x: p2.x ± 9`<br>`y: p2.y - 18` (down) or `+18` (up) | `≈ 90°` (near vertical) | `≈ 90°` (near vertical) |
-| **2** | Horizontal | **2nd** | `verticalOverreach` | `horizontalToTarget` | LEFT | `1.2` | `30 * 1.2 = 36` | `18` | `x: p1.x - 18`<br>`y: p1.y + yOffset`<br>`yOffset = prevDy > 0 ? 36 : -36` | `x: p2.x + 18`<br>`y: p2.y + yOffset` | `≈ 116°` (LEFT + offset) | `≈ -116°` (LEFT + offset) |
-| **3** | Vertical | **3rd** | `horizontalToTarget` | `verticalToTargetY` | UP/DOWN | `1.2` | `30 * 1.2 = 36` | `18` | `x: p1.x + xOffset`<br>`xOffset = prevDx < 0 ? 36 : -36`<br>`y: p1.y + 18` (down) or `-18` (up) | `x: p2.x + xOffset`<br>`y: p2.y - 18` (down) or `+18` (up) | `≈ 27°` (DOWN + offset) | `≈ 153°` (DOWN + offset) |
-| **4** | Horizontal | **4th** | `verticalToTargetY` | `horizontalToInput` | RIGHT | `0.8` | `30 * 0.8 = 24` | `18` | `x: p1.x + 18`<br>`y: p1.y + yOffset`<br>`yOffset = prevDy > 0 ? 24 : -24` | `x: p2.x - 18`<br>`y: p2.y + yOffset` | `≈ 0°` (near horizontal) | `≈ 0°` (near horizontal) |
+| Segment | Type | Elbow | p1 | p2 | Direction | perpendicularOffset | tangentOffset | cp1 Calculation | cp2 Calculation | Distance from Endpoint |
+|---------|------|-------|----|----|-----------|---------------------|---------------|-----------------|-----------------|----------------------|
+| **0** | Horizontal | - | `source` | `rightExtend` | RIGHT | `9px` | `18px` | `x: p1.x + 18`<br>`y: p1.y + 9` (if dy>0) or `-9` (if dy<0) | `x: p2.x - 18`<br>`y: p2.y - 9` (opposite) | `√(18²+9²) ≈ 20.12px` |
+| **1** | Vertical | - | `rightExtend` | `verticalOverreach` | UP/DOWN | `9px` | `18px` | `x: p1.x + 9` (if dx>0) or `-9` (if dx<0)<br>`y: p1.y + 18` (if dy>0) or `-18` (if dy<0) | `x: p2.x - 9` (opposite)<br>`y: p2.y - 18` (opposite) | `√(18²+9²) ≈ 20.12px` |
+| **2** | Horizontal | **2nd** | `verticalOverreach` | `horizontalToTarget` | LEFT | `9px` | `18px` | `x: p1.x - 18`<br>`y: p1.y + 9` (if dy>0) or `-9` (if dy<0) | `x: p2.x + 18`<br>`y: p2.y - 9` (opposite) | `√(18²+9²) ≈ 20.12px` |
+| **3** | Vertical | **3rd** | `horizontalToTarget` | `verticalToTargetY` | UP/DOWN | `9px` | `18px` | `x: p1.x + 9` (if dx>0) or `-9` (if dx<0)<br>`y: p1.y + 18` (if dy>0) or `-18` (if dy<0) | `x: p2.x - 9` (opposite)<br>`y: p2.y - 18` (opposite) | `√(18²+9²) ≈ 20.12px` |
+| **4** | Horizontal | **4th** | `verticalToTargetY` | `horizontalToInput` | RIGHT | `9px` | `18px` | `x: p1.x + 18`<br>`y: p1.y + 9` (if dy>0) or `-9` (if dy<0) | `x: p2.x - 18`<br>`y: p2.y - 9` (opposite) | `√(18²+9²) ≈ 20.12px` |
 
 ### Quick Reference Summary
 
-| Segment | Elbow | tangentOffset | perpendicularOffset | Offset Direction Based On |
-|---------|-------|---------------|-------------------|---------------------------|
-| 0 | - | 18px | 9px | Segment direction (dy) |
-| 1 | - | 18px | 9px | Previous segment or default |
-| 2 | **2nd** | 18px | **36px** | Previous vertical direction (prevDy) |
-| 3 | **3rd** | 18px | **36px** | Previous horizontal direction (prevDx) |
-| 4 | **4th** | 18px | **24px** | Previous vertical direction (prevDy) |
+| Segment | Elbow | tangentOffset | perpendicularOffset | Total Distance | Offset Direction |
+|---------|-------|---------------|-------------------|----------------|------------------|
+| 0 | - | 18px | 9px | ≈20.12px | Segment direction (dy) |
+| 1 | - | 18px | 9px | ≈20.12px | Segment direction (dx) |
+| 2 | **2nd** | 18px | 9px | ≈20.12px | Segment direction (dy) |
+| 3 | **3rd** | 18px | 9px | ≈20.12px | Segment direction (dx) |
+| 4 | **4th** | 18px | 9px | ≈20.12px | Segment direction (dy) |
+
+**Note**: All elbows now use **consistent minimal offsets** with no smoothness enhancement or overshoot. cp1 and cp2 use **opposite perpendicular offsets** for symmetry.
 
 ## Detailed Calculations by Elbow
 
@@ -40,71 +43,63 @@
 - **Type**: Horizontal
 - **dx**: positive (RIGHT)
 - **dy**: 0 (horizontal)
+- **perpendicularOffset**: `9px` (consistent minimal offset)
+- **tangentOffset**: `18px` (fixed)
+- **Offset Direction**: Based on segment direction (`dy > 0 ? 1 : -1`)
 - **cp1**: 
   - `x = p1.x + 18` (tangent offset along direction)
-  - `y = p1.y ± 9` (perpendicular offset, direction based on dy)
+  - `y = p1.y + 9` (if dy > 0) or `p1.y - 9` (if dy < 0)
 - **cp2**:
   - `x = p2.x - 18` (tangent offset opposite direction)
-  - `y = p2.y ± 9` (same perpendicular offset as cp1)
-- **Tangent at p1**: `0°` (horizontal, pointing RIGHT)
-- **Tangent at p2**: `0°` (horizontal, pointing RIGHT)
+  - `y = p2.y - 9` (opposite perpendicular offset for symmetry)
+- **Distance from endpoints**: `√(18² + 9²) ≈ 20.12px` (balanced)
 
 ### Segment 1: rightExtend → verticalOverreach (Vertical)
 - **Type**: Vertical
 - **dx**: 0 (vertical)
 - **dy**: positive (DOWN) or negative (UP)
+- **perpendicularOffset**: `9px` (consistent minimal offset)
+- **tangentOffset**: `18px` (fixed)
+- **Offset Direction**: Based on segment direction (`dx > 0 ? 1 : -1`)
 - **cp1**:
-  - `x = p1.x ± 9` (perpendicular offset, direction based on dx or prevSegment)
+  - `x = p1.x + 9` (if dx > 0) or `p1.x - 9` (if dx < 0)
   - `y = p1.y + 18` (if dy > 0) or `p1.y - 18` (if dy < 0)
 - **cp2**:
-  - `x = p2.x ± 9` (same perpendicular offset as cp1)
-  - `y = p2.y - 18` (if dy > 0) or `p2.y + 18` (if dy < 0)
-- **Tangent at p1**: `90°` (vertical, pointing DOWN) or `-90°` (UP)
-- **Tangent at p2**: `90°` (vertical, pointing DOWN) or `-90°` (UP)
+  - `x = p2.x - 9` (opposite perpendicular offset for symmetry)
+  - `y = p2.y - 18` (opposite tangent offset)
+- **Distance from endpoints**: `√(18² + 9²) ≈ 20.12px` (balanced)
 
 ### Segment 2: verticalOverreach → horizontalToTarget (2nd Elbow - Horizontal LEFT)
 - **Type**: Horizontal LEFT
 - **Elbow Type**: 2nd elbow
 - **dx**: negative (LEFT)
 - **dy**: 0 (horizontal)
-- **smoothnessFactor**: `1.2` (enhanced smoothness)
-- **perpendicularOffset**: `30 * 1.2 = 36`
-- **tangentOffset**: `18` (fixed)
-- **yOffset Calculation**:
-  - If `prevSegment` exists (segment 1):
-    - `prevDy = prevSegment.end.y - prevSegment.start.y`
-    - `yOffset = prevDy > 0 ? 36 : -36`
-  - Otherwise: `yOffset = dy > 0 ? 36 : -36` (default)
+- **perpendicularOffset**: `9px` (consistent minimal offset)
+- **tangentOffset**: `18px` (fixed)
+- **Offset Direction**: Based on segment direction (`dy > 0 ? 1 : -1`)
 - **cp1**:
   - `x = p1.x - 18` (tangent offset LEFT)
-  - `y = p1.y + yOffset` (perpendicular offset based on previous vertical direction)
+  - `y = p1.y + 9` (if dy > 0) or `p1.y - 9` (if dy < 0)
 - **cp2**:
   - `x = p2.x + 18` (tangent offset opposite, toward p2)
-  - `y = p2.y + yOffset` (same perpendicular offset)
-- **Tangent at p1**: `180°` (horizontal, pointing LEFT)
-- **Tangent at p2**: `180°` (horizontal, pointing LEFT)
+  - `y = p2.y - 9` (opposite perpendicular offset for symmetry)
+- **Distance from endpoints**: `√(18² + 9²) ≈ 20.12px` (balanced)
 
 ### Segment 3: horizontalToTarget → verticalToTargetY (3rd Elbow - Vertical)
 - **Type**: Vertical
 - **Elbow Type**: 3rd elbow
 - **dx**: 0 (vertical)
 - **dy**: positive (DOWN) or negative (UP)
-- **smoothnessFactor**: `1.2` (enhanced smoothness)
-- **perpendicularOffset**: `30 * 1.2 = 36`
-- **tangentOffset**: `18` (fixed)
-- **xOffset Calculation**:
-  - If `prevSegment` exists (segment 2):
-    - `prevDx = prevSegment.end.x - prevSegment.start.x`
-    - `xOffset = prevDx < 0 ? 36 : -36` (opposite to horizontal direction)
-  - Otherwise: `xOffset = dx > 0 ? 36 : -36` (default)
+- **perpendicularOffset**: `9px` (consistent minimal offset)
+- **tangentOffset**: `18px` (fixed)
+- **Offset Direction**: Based on segment direction (`dx > 0 ? 1 : -1`)
 - **cp1**:
-  - `x = p1.x + xOffset` (perpendicular offset based on previous horizontal direction)
+  - `x = p1.x + 9` (if dx > 0) or `p1.x - 9` (if dx < 0)
   - `y = p1.y + 18` (if dy > 0) or `p1.y - 18` (if dy < 0)
 - **cp2**:
-  - `x = p2.x + xOffset` (same perpendicular offset)
-  - `y = p2.y - 18` (if dy > 0) or `p2.y + 18` (if dy < 0)
-- **Tangent at p1**: `90°` (vertical, pointing DOWN) or `-90°` (UP)
-- **Tangent at p2**: `90°` (vertical, pointing DOWN) or `-90°` (UP)
+  - `x = p2.x - 9` (opposite perpendicular offset for symmetry)
+  - `y = p2.y - 18` (opposite tangent offset)
+- **Distance from endpoints**: `√(18² + 9²) ≈ 20.12px` (balanced)
 - **Note**: Clearance calculation considers extended path to 4th elbow's x position (`destination.x`)
 
 ### Segment 4: verticalToTargetY → horizontalToInput (4th Elbow - Horizontal RIGHT)
@@ -112,22 +107,16 @@
 - **Elbow Type**: 4th elbow
 - **dx**: positive (RIGHT)
 - **dy**: 0 (horizontal)
-- **smoothnessFactor**: `0.8` (reduced smoothness)
-- **perpendicularOffset**: `30 * 0.8 = 24`
-- **tangentOffset**: `18` (fixed)
-- **yOffset Calculation**:
-  - If `prevSegment` exists (segment 3):
-    - `prevDy = prevSegment.end.y - prevSegment.start.y`
-    - `yOffset = prevDy > 0 ? 24 : -24`
-  - Otherwise: `yOffset = dy > 0 ? 24 : -24` (default)
+- **perpendicularOffset**: `9px` (consistent minimal offset)
+- **tangentOffset**: `18px` (fixed)
+- **Offset Direction**: Based on segment direction (`dy > 0 ? 1 : -1`)
 - **cp1**:
   - `x = p1.x + 18` (tangent offset RIGHT)
-  - `y = p1.y + yOffset` (perpendicular offset based on previous vertical direction)
+  - `y = p1.y + 9` (if dy > 0) or `p1.y - 9` (if dy < 0)
 - **cp2**:
   - `x = p2.x - 18` (tangent offset opposite, toward p2)
-  - `y = p2.y + yOffset` (same perpendicular offset)
-- **Tangent at p1**: `0°` (horizontal, pointing RIGHT)
-- **Tangent at p2**: `0°` (horizontal, pointing RIGHT)
+  - `y = p2.y - 9` (opposite perpendicular offset for symmetry)
+- **Distance from endpoints**: `√(18² + 9²) ≈ 20.12px` (balanced)
 
 ## Tangent Angle Calculations
 
@@ -149,45 +138,55 @@ For a cubic Bézier curve, the tangent direction at each endpoint is determined 
 Assuming:
 - `p1 = {x: 500, y: 200}` (verticalOverreach)
 - `p2 = {x: 300, y: 200}` (horizontalToTarget)
-- `prevDy = 100` (previous segment went DOWN)
-- `yOffset = 36` (positive)
+- `dy = 0` (horizontal segment, default direction)
 
 **Control Points**:
-- `cp1 = {x: 500 - 18 = 482, y: 200 + 36 = 236}`
-- `cp2 = {x: 300 + 18 = 318, y: 200 + 36 = 236}`
+- `cp1 = {x: 500 - 18 = 482, y: 200 + 9 = 209}` (tangent LEFT, perpendicular DOWN)
+- `cp2 = {x: 300 + 18 = 318, y: 200 - 9 = 191}` (tangent RIGHT, perpendicular UP - opposite for symmetry)
 
 **Tangent Angles**:
-- At p1: `atan2(236 - 200, 482 - 500) = atan2(36, -18) ≈ 116.57°` (pointing LEFT and slightly DOWN)
-- At p2: `atan2(200 - 236, 300 - 318) = atan2(-36, -18) ≈ -116.57°` (pointing LEFT and slightly UP)
+- At p1: `atan2(209 - 200, 482 - 500) = atan2(9, -18) ≈ 153.43°` (pointing LEFT and slightly DOWN)
+- At p2: `atan2(200 - 191, 300 - 318) = atan2(9, -18) ≈ 153.43°` (pointing LEFT and slightly UP)
+
+**Distance Check**:
+- cp1 from p1: `√((482-500)² + (209-200)²) = √(324 + 81) = √405 ≈ 20.12px` ✓
+- cp2 from p2: `√((318-300)² + (191-200)²) = √(324 + 81) = √405 ≈ 20.12px` ✓
 
 #### Segment 3 (3rd Elbow - Vertical DOWN)
 Assuming:
 - `p1 = {x: 300, y: 200}` (horizontalToTarget)
 - `p2 = {x: 300, y: 400}` (verticalToTargetY)
-- `prevDx = -200` (previous segment went LEFT)
-- `xOffset = 36` (positive, opposite to LEFT)
+- `dx = 0` (vertical segment, default direction)
+- `dy > 0` (going DOWN)
 
 **Control Points**:
-- `cp1 = {x: 300 + 36 = 336, y: 200 + 18 = 218}`
-- `cp2 = {x: 300 + 36 = 336, y: 400 - 18 = 382}`
+- `cp1 = {x: 300 + 9 = 309, y: 200 + 18 = 218}` (perpendicular RIGHT, tangent DOWN)
+- `cp2 = {x: 300 - 9 = 291, y: 400 - 18 = 382}` (perpendicular LEFT - opposite, tangent UP - opposite)
 
 **Tangent Angles**:
-- At p1: `atan2(218 - 200, 336 - 300) = atan2(18, 36) ≈ 26.57°` (pointing DOWN and slightly RIGHT)
-- At p2: `atan2(400 - 382, 300 - 336) = atan2(18, -36) ≈ 153.43°` (pointing DOWN and slightly LEFT)
+- At p1: `atan2(218 - 200, 309 - 300) = atan2(18, 9) ≈ 63.43°` (pointing DOWN and slightly RIGHT)
+- At p2: `atan2(400 - 382, 300 - 291) = atan2(18, 9) ≈ 63.43°` (pointing DOWN and slightly RIGHT)
+
+**Distance Check**:
+- cp1 from p1: `√((309-300)² + (218-200)²) = √(81 + 324) = √405 ≈ 20.12px` ✓
+- cp2 from p2: `√((291-300)² + (382-400)²) = √(81 + 324) = √405 ≈ 20.12px` ✓
 
 ## Key Observations
 
 1. **Fixed Tangent Offset**: All elbows use `tangentOffset = 18px` (fixed), preventing overly large curves
-2. **Variable Perpendicular Offset**: 
-   - 2nd & 3rd elbows: `36px` (1.2x radius) for enhanced smoothness
-   - 4th elbow: `24px` (0.8x radius) for reduced smoothness
-   - Others: `9px` (0.3x radius) standard
-3. **Tangent Angles**: 
-   - Not exactly 0° or 90° due to perpendicular offsets
-   - Angles depend on both tangent and perpendicular offsets
-   - Creates smooth, rounded transitions at elbows
-4. **Perpendicular Offsets**: Based on previous segment direction to create smooth transitions
+2. **Consistent Perpendicular Offset**: 
+   - **All elbows**: `9px` (0.3x radius) - **NO smoothness enhancement or overshoot**
+   - Removed: Variable offsets (36px for 2nd/3rd, 24px for 4th)
+   - All elbows now use minimal, consistent offsets
+3. **Balanced Control Points**: 
+   - cp1 and cp2 use **opposite perpendicular offsets** for symmetry
+   - Both control points are at equal distance from their endpoints: `√(18² + 9²) ≈ 20.12px`
+   - Creates uniform, balanced curves
+4. **Simple Offset Direction**: 
+   - Based on segment direction (dx/dy), not previous segment direction
+   - Removed: Complex elbow-specific offset direction logic
 5. **3rd Elbow Special Case**: Clearance calculation extends to 4th elbow's x position for accurate collision detection
+6. **No Smoothness Enhancement**: All smoothness factors (1.2x, 0.8x) have been removed for consistent, minimal curves
 
 ## Visual Representation
 
@@ -221,6 +220,8 @@ Waypoint Flow (Backward Connection):
 ## Control Point Positioning
 
 For each segment, control points are positioned:
-- **Along the segment direction** by `tangentOffset` (18px)
-- **Perpendicular to the segment** by `perpendicularOffset` (varies by elbow type)
-- **Direction determined by** previous segment's movement direction for smooth transitions
+- **Along the segment direction** by `tangentOffset` (18px) - **fixed for all**
+- **Perpendicular to the segment** by `perpendicularOffset` (9px) - **consistent for all**
+- **Direction determined by** segment direction (dx/dy) - **simple, no special elbow handling**
+- **Symmetry**: cp1 and cp2 use **opposite perpendicular offsets** for balanced curves
+- **Total distance**: Both control points are at `√(18² + 9²) ≈ 20.12px` from their endpoints
