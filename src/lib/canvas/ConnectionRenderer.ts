@@ -173,6 +173,169 @@ function renderDebugControlPoints(
       graphics.fill();
     }
   }
+
+  // DEBUG: Draw cp1 and cp2 control points and tangent lines from waypoints (in red)
+  if (route.controlPoints && route.controlPoints.length > 0) {
+    const cubicSegments = bezierToCubicSegments(route.controlPoints);
+    const debugRed = 0xff0000; // Red color for debug lines
+    const tangentLength = 50; // Length of tangent lines
+    
+    // Collect all cp1 and cp2 points
+    const cp1Points: Point[] = [];
+    const cp2Points: Point[] = [];
+    
+    for (const segment of cubicSegments) {
+      cp1Points.push(segment.cp1);
+      cp2Points.push(segment.cp2);
+    }
+    
+    // Draw cp1 points in red
+    if (cp1Points.length > 0) {
+      graphics.setFillStyle({ color: debugRed, alpha: 0.9 });
+      graphics.setStrokeStyle({
+        width: 2,
+        color: debugRed,
+        alpha: 1,
+      });
+      for (const cp1 of cp1Points) {
+        graphics.circle(cp1.x, cp1.y, debugControlPointRadius);
+      }
+      graphics.fill();
+      graphics.stroke();
+    }
+    
+    // Draw cp2 points in red
+    if (cp2Points.length > 0) {
+      graphics.setFillStyle({ color: debugRed, alpha: 0.9 });
+      graphics.setStrokeStyle({
+        width: 2,
+        color: debugRed,
+        alpha: 1,
+      });
+      for (const cp2 of cp2Points) {
+        graphics.circle(cp2.x, cp2.y, debugControlPointRadius);
+      }
+      graphics.fill();
+      graphics.stroke();
+    }
+    
+    // Draw tangent lines from waypoints
+    if (route.waypoints && route.waypoints.length > 0 && cubicSegments.length > 0) {
+      graphics.setStrokeStyle({
+        width: 2,
+        color: debugRed,
+        alpha: 0.6,
+      });
+      
+      // Build a map of segment start points for quick lookup
+      const segmentStarts: Point[] = [start];
+      for (const seg of cubicSegments) {
+        segmentStarts.push(seg.end);
+      }
+      
+      // For each waypoint, find the corresponding segment and draw tangent
+      for (const waypoint of route.waypoints) {
+        const tolerance = 5;
+        let tangentDx = 0;
+        let tangentDy = 0;
+        let found = false;
+        
+        // Check if waypoint matches a segment start point
+        for (let i = 0; i < segmentStarts.length - 1; i++) {
+          const segStart = segmentStarts[i];
+          if (Math.abs(waypoint.x - segStart.x) < tolerance && 
+              Math.abs(waypoint.y - segStart.y) < tolerance) {
+            // Waypoint is at the start of segment i
+            const seg = cubicSegments[i];
+            if (seg) {
+              // Tangent at start: direction from start to cp1
+              tangentDx = seg.cp1.x - segStart.x;
+              tangentDy = seg.cp1.y - segStart.y;
+              found = true;
+              break;
+            }
+          }
+        }
+        
+        // If not found at start, check if it matches a segment end
+        if (!found) {
+          for (let i = 0; i < cubicSegments.length; i++) {
+            const seg = cubicSegments[i];
+            if (Math.abs(waypoint.x - seg.end.x) < tolerance && 
+                Math.abs(waypoint.y - seg.end.y) < tolerance) {
+              // Waypoint is at the end of segment i
+              // Tangent at end: direction from cp2 to end
+              tangentDx = seg.end.x - seg.cp2.x;
+              tangentDy = seg.end.y - seg.cp2.y;
+              found = true;
+              break;
+            }
+          }
+        }
+        
+        // If still not found, find the closest segment and calculate tangent
+        if (!found) {
+          let minDist = Infinity;
+          let closestSegIndex = -1;
+          let isAtStart = false;
+          
+          for (let i = 0; i < cubicSegments.length; i++) {
+            const seg = cubicSegments[i];
+            const segStart = segmentStarts[i];
+            
+            // Check distance to start
+            const distToStart = Math.sqrt(
+              Math.pow(waypoint.x - segStart.x, 2) + 
+              Math.pow(waypoint.y - segStart.y, 2)
+            );
+            if (distToStart < minDist) {
+              minDist = distToStart;
+              closestSegIndex = i;
+              isAtStart = true;
+            }
+            
+            // Check distance to end
+            const distToEnd = Math.sqrt(
+              Math.pow(waypoint.x - seg.end.x, 2) + 
+              Math.pow(waypoint.y - seg.end.y, 2)
+            );
+            if (distToEnd < minDist) {
+              minDist = distToEnd;
+              closestSegIndex = i;
+              isAtStart = false;
+            }
+          }
+          
+          if (closestSegIndex >= 0) {
+            const seg = cubicSegments[closestSegIndex];
+            const segStart = segmentStarts[closestSegIndex];
+            
+            if (isAtStart) {
+              tangentDx = seg.cp1.x - segStart.x;
+              tangentDy = seg.cp1.y - segStart.y;
+            } else {
+              tangentDx = seg.end.x - seg.cp2.x;
+              tangentDy = seg.end.y - seg.cp2.y;
+            }
+            found = true;
+          }
+        }
+        
+        // Draw the tangent line if we found a direction
+        if (found) {
+          const length = Math.sqrt(tangentDx * tangentDx + tangentDy * tangentDy);
+          if (length > 0.1) {
+            const normalizedDx = (tangentDx / length) * tangentLength;
+            const normalizedDy = (tangentDy / length) * tangentLength;
+            graphics.moveTo(waypoint.x, waypoint.y);
+            graphics.lineTo(waypoint.x + normalizedDx, waypoint.y + normalizedDy);
+          }
+        }
+      }
+      
+      graphics.stroke();
+    }
+  }
 }
 
 /**

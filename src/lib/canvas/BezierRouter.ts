@@ -752,10 +752,13 @@ function simplifyWaypoints(waypoints: Point[], workspaces: WorkspaceBounds[]): P
 /**
  * Phase 2: Classify segments based on proximity to workspaces
  * ENHANCED: Simulates curves for FREE/TRANSITION segments and reclassifies if unsafe
+ * FIXED: For 3rd elbow in backward connections, considers 4th elbow x position for clearance
  */
 function classifySegments(
   pathPoints: Point[],
-  workspaces: WorkspaceBounds[]
+  workspaces: WorkspaceBounds[],
+  isBackward: boolean = false,
+  destinationX?: number
 ): HybridSegment[] {
   const segments: HybridSegment[] = [];
   
@@ -763,10 +766,21 @@ function classifySegments(
     const p1 = pathPoints[i];
     const p2 = pathPoints[i + 1];
     
-    // Calculate minimum clearance along straight segment
+    // For 3rd elbow (segment index 3) in backward connections, consider the full path
+    // including the 4th elbow's x position alignment
+    let clearanceP1 = p1;
+    let clearanceP2 = p2;
+    
+    if (isBackward && i === 3 && destinationX !== undefined) {
+      // 3rd elbow: vertical segment that will curve to 4th elbow's x position
+      // Calculate clearance considering the full path to destination.x
+      clearanceP2 = { x: destinationX, y: p2.y };
+    }
+    
+    // Calculate minimum clearance along segment (or extended path for 3rd elbow)
     let minClearance = Infinity;
     for (const ws of workspaces) {
-      const clearance = segmentWorkspaceDistance(p1, p2, ws);
+      const clearance = segmentWorkspaceDistance(clearanceP1, clearanceP2, ws);
       minClearance = Math.min(minClearance, clearance);
     }
     
@@ -782,31 +796,39 @@ function classifySegments(
     
     // Post-classify: For FREE/TRANSITION segments, simulate the curve and check if it's safe
     if (segType === SegmentType.FREE || segType === SegmentType.TRANSITION) {
+      // For 3rd elbow in backward connections, simulate curve extending to 4th elbow's x position
+      let curveEnd = p2;
+      if (isBackward && i === 3 && destinationX !== undefined) {
+        // 3rd elbow curve will extend horizontally to 4th elbow's x position
+        curveEnd = { x: destinationX, y: p2.y };
+      }
+      
       // Simulate a bump curve to check if it would intersect
-      const dx = Math.abs(p2.x - p1.x);
-      const dy = Math.abs(p2.y - p1.y);
+      const dx = Math.abs(curveEnd.x - p1.x);
+      const dy = Math.abs(curveEnd.y - p1.y);
       let curveHeight = Math.min(dy * 0.5, dx * 0.3);
       curveHeight = Math.max(curveHeight, 20);
       curveHeight = Math.min(curveHeight, 80);
       
-      const curveDir = p2.y > p1.y ? 1 : -1;
+      const curveDir = curveEnd.y > p1.y ? 1 : -1;
       const cp1: Point = {
         x: p1.x + dx * 0.3,
         y: p1.y + curveDir * curveHeight * 0.7
       };
       const cp2: Point = {
-        x: p2.x - dx * 0.3,
-        y: p2.y - curveDir * curveHeight * 0.7
+        x: curveEnd.x - dx * 0.3,
+        y: curveEnd.y - curveDir * curveHeight * 0.7
       };
       
       // Check if simulated curve collides
-      if (bezierCurveCollides(p1, cp1, cp2, p2, workspaces)) {
+      if (bezierCurveCollides(p1, cp1, cp2, curveEnd, workspaces)) {
         // Reclassify as CRITICAL if curve would intersect
         segType = SegmentType.CRITICAL;
         // Recalculate clearance for the straight segment (which we'll use for step routing)
+        // Use extended path for 3rd elbow to consider 4th elbow x position
         minClearance = Infinity;
         for (const ws of workspaces) {
-          const clearance = segmentWorkspaceDistance(p1, p2, ws);
+          const clearance = segmentWorkspaceDistance(clearanceP1, clearanceP2, ws);
           minClearance = Math.min(minClearance, clearance);
         }
       }
@@ -919,65 +941,78 @@ function findBestCurveDirection(
 
 /**
  * Generate smooth elbow segment for backward connections
- * Creates smooth Bézier curves with consistent control points at elbows
- * Ensures same smoothness at 2nd, 3rd, and 4th elbow turns
+ * Creates Bézier curves with minimal, consistent control points at elbows
+ * Uses fixed radius and minimal perpendicular offsets (no smoothness enhancement or overshoot)
+ * All elbows use the same consistent offsets for uniform curves
  */
 function generateSmoothElbowSegment(
   p1: Point,
   p2: Point,
-  _prevSegment?: { start: Point; end: Point } | null, // Reserved for future use (smooth transitions between segments)
-  _nextSegment?: { start: Point; end: Point } | null  // Reserved for future use (smooth transitions between segments)
+  prevSegment?: { start: Point; end: Point } | null,
+  nextSegment?: { start: Point; end: Point } | null,
+  isSecondElbow: boolean = false,
+  isThirdElbow: boolean = false,
+  isFourthElbow: boolean = false,
+  curveRadius: number = ELBOW_CURVE_RADIUS
 ): PathCommand[] {
-  // Parameters reserved for future enhancement: smooth transitions between consecutive segments
-  void _prevSegment;
-  void _nextSegment;
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
   
-  // Calculate smoothness radius based on segment length
-  // Use consistent smoothness factor for all elbows
-  const smoothnessRadius = Math.min(ELBOW_CURVE_RADIUS, distance * ELBOW_SMOOTHNESS);
+  // FIX 1: Use fixed radius for consistency (not distance-dependent)
+  // For 2nd, 3rd, and 4th elbows, use fixed radius to ensure visual consistency
+  // Allow radius to be adjusted for iterative validation retries
+  const fixedRadius = curveRadius;
   
   // Determine if this is a horizontal or vertical segment
   const isHorizontal = Math.abs(dy) < Math.abs(dx);
   
-  // Calculate control points for smooth transition
+  // Calculate control points with minimal, consistent offsets (no smoothness enhancement or overshoot)
   let cp1: Point;
   let cp2: Point;
   
+  // REMOVED: All smoothness factors and overshoot - use consistent minimal offsets for all elbows
+  const perpendicularOffset = fixedRadius * ELBOW_SMOOTHNESS; // Consistent minimal offset (30 * 0.3 = 9px)
+  const tangentOffset = fixedRadius * 0.6; // Fixed tangent offset (30 * 0.6 = 18px)
+  
   if (isHorizontal) {
-    // Horizontal segment: smooth transition at start and end
-    const horizontalSmooth = smoothnessRadius;
+    // Horizontal segment: offset Y perpendicularly with minimal, consistent offsets
+    // Use balanced perpendicular offsets - cp1 and cp2 use opposite perpendicular offsets
+    // Offset direction based on segment direction (no special elbow handling)
+    const yOffsetDirection = dy > 0 ? 1 : -1;
+    
     cp1 = {
-      x: p1.x + (dx > 0 ? horizontalSmooth : -horizontalSmooth),
-      y: p1.y
+      x: p1.x + (dx > 0 ? tangentOffset : -tangentOffset),
+      y: p1.y + yOffsetDirection * perpendicularOffset
     };
     cp2 = {
-      x: p2.x - (dx > 0 ? horizontalSmooth : -horizontalSmooth),
-      y: p2.y
+      x: p2.x - (dx > 0 ? tangentOffset : -tangentOffset),
+      y: p2.y - yOffsetDirection * perpendicularOffset  // Opposite perpendicular offset for symmetry
     };
   } else {
-    // Vertical segment: smooth transition at start and end
-    const verticalSmooth = smoothnessRadius;
+    // Vertical segment: offset X perpendicularly with minimal, consistent offsets
+    // Use balanced perpendicular offsets - cp1 and cp2 use opposite perpendicular offsets
+    // Offset direction based on segment direction (no special elbow handling)
+    const xOffsetDirection = dx > 0 ? 1 : -1;
+    
     cp1 = {
-      x: p1.x,
-      y: p1.y + (dy > 0 ? verticalSmooth : -verticalSmooth)
+      x: p1.x + xOffsetDirection * perpendicularOffset,
+      y: p1.y + (dy > 0 ? tangentOffset : -tangentOffset)
     };
     cp2 = {
-      x: p2.x,
-      y: p2.y - (dy > 0 ? verticalSmooth : -verticalSmooth)
+      x: p2.x - xOffsetDirection * perpendicularOffset,  // Opposite perpendicular offset for symmetry
+      y: p2.y - (dy > 0 ? tangentOffset : -tangentOffset)
     };
   }
   
   // For very short segments, use straight line
-  if (distance < smoothnessRadius * 2) {
+  if (distance < fixedRadius * 2) {
     return [
       { type: 'L', x1: p2.x, y1: p2.y }
     ];
   }
   
-  // Create smooth Bézier curve
+  // Create Bézier curve with minimal, consistent control points
   return [
     {
       type: 'C',
@@ -1112,11 +1147,13 @@ function generateBlendedSegment(
 /**
  * Generate hybrid curve from classified segments
  * ENHANCED: Workspace-aware curve generation with validation
+ * Uses consistent minimal offsets for all elbows (no smoothness enhancement)
  */
 function generateHybridCurve(
   segments: HybridSegment[],
   isBackward: boolean = false,
-  workspaces: WorkspaceBounds[] = []
+  workspaces: WorkspaceBounds[] = [],
+  curveRadius: number = ELBOW_CURVE_RADIUS
 ): PathCommand[] {
   const commands: PathCommand[] = [];
   
@@ -1124,19 +1161,32 @@ function generateHybridCurve(
     const seg = segments[i];
     let segCommands: PathCommand[];
     
-    // For backward connections, use smooth elbow curves with consistent smoothness
-    // This creates smooth transitions at 2nd, 3rd, and 4th elbows with same control point behavior
+    // For backward connections, use elbow curves with consistent minimal offsets
+    // Identify 2nd, 3rd, and 4th elbows based on segment index
+    // Waypoint structure: source -> rightExtend -> verticalOverreach -> horizontalToTarget -> verticalToTargetY -> horizontalToInput
+    // Segments: 0: source->rightExtend, 1: rightExtend->verticalOverreach, 2: verticalOverreach->horizontalToTarget (2nd elbow),
+    //           3: horizontalToTarget->verticalToTargetY (3rd elbow), 4: verticalToTargetY->horizontalToInput (4th elbow)
     if (isBackward) {
-      // Get previous and next segments for context (to ensure smooth transitions)
+      // Get previous and next segments for context
       const prevSeg = i > 0 ? segments[i - 1] : null;
       const nextSeg = i < segments.length - 1 ? segments[i + 1] : null;
       
-      // Use smooth elbow segments for consistent smoothness at all elbows
+      // Identify specific elbows: segment index 2 = 2nd elbow, index 3 = 3rd elbow, index 4 = 4th elbow
+      const isSecondElbow = i === 2; // Horizontal left after vertical overreach
+      const isThirdElbow = i === 3;   // Vertical to target Y
+      const isFourthElbow = i === 4;  // Horizontal to input
+      
+      // Use elbow segments with consistent minimal offsets (no smoothness enhancement)
+      // Pass adjustable curve radius for iterative validation retries
       segCommands = generateSmoothElbowSegment(
         seg.start,
         seg.end,
         prevSeg ? { start: prevSeg.start, end: prevSeg.end } : null,
-        nextSeg ? { start: nextSeg.start, end: nextSeg.end } : null
+        nextSeg ? { start: nextSeg.start, end: nextSeg.end } : null,
+        isSecondElbow,
+        isThirdElbow,
+        isFourthElbow,
+        curveRadius
       );
     } else if (seg.type === SegmentType.CRITICAL) {
       // Forward connections: use step routing for guaranteed clearance
@@ -1239,22 +1289,41 @@ function hybridStepBumpRoute(
   const simplifiedWaypoints = simplifyWaypoints(waypoints, workspaces);
   
   // Phase 2: Classify segments
-  const segments = classifySegments(simplifiedWaypoints, workspaces);
+  // Pass destination.x for 3rd elbow clearance calculation in backward connections
+  const segments = classifySegments(simplifiedWaypoints, workspaces, isBackward, destination.x);
   
-  // Phase 3: Generate hybrid curve commands (with workspace awareness)
-  const commands = generateHybridCurve(segments, isBackward, workspaces);
+  // Phase 3: Generate hybrid curve commands with iterative radius adjustment for validation
+  // FIXED: Iteratively increase radius if clearance fails (up to 3 attempts, 5px per attempt)
+  let currentRadius = ELBOW_CURVE_RADIUS;
+  let commands: PathCommand[] = [];
+  let validationResult: { isSafe: boolean; minClearance: number } = { isSafe: false, minClearance: 0 };
+  let maxAttempts = 3;
+  let attempts = 0;
   
-  // Convert commands to control points for rendering
-  const controlPoints = commandsToControlPoints(commands, simplifiedWaypoints[0]);
-  
-  // Post-routing validation: Check if the final path is safe
-  const validationResult = validateRoutePath(commands, simplifiedWaypoints[0], workspaces);
-  if (!validationResult.isSafe && validationResult.minClearance < MIN_CLEARANCE) {
-    // If route is unsafe, try to refine by increasing clearance penalties
-    // For now, we'll return the route but mark it as having low clearance
-    // The curve generation should have already handled most cases
-    console.warn('Route has low clearance:', validationResult.minClearance);
+  while (attempts < maxAttempts) {
+    // Generate hybrid curve commands with current radius
+    commands = generateHybridCurve(segments, isBackward, workspaces, currentRadius);
+    
+    // Post-routing validation: Check if the final path is safe
+    validationResult = validateRoutePath(commands, simplifiedWaypoints[0], workspaces);
+    
+    // If route is safe or we've exhausted attempts, break
+    if (validationResult.isSafe || validationResult.minClearance >= MIN_CLEARANCE || attempts >= maxAttempts - 1) {
+      break;
+    }
+    
+    // Increase radius by 5px and retry
+    currentRadius += 5;
+    attempts++;
   }
+  
+  // Final validation check
+  if (!validationResult.isSafe && validationResult.minClearance < MIN_CLEARANCE) {
+    console.warn('Route has low clearance after retries:', validationResult.minClearance, 'radius:', currentRadius);
+  }
+  
+  // Convert final commands to control points
+  const controlPoints = commandsToControlPoints(commands, simplifiedWaypoints[0]);
   
   // Calculate route metrics (using actual curve clearance)
   const clearance = Math.max(validationResult.minClearance, calculateRouteClearance(simplifiedWaypoints, workspaces));
