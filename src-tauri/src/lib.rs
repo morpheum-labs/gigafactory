@@ -23,11 +23,18 @@ pub fn run() {
             check_gemini_cli_available,
             check_grok_cli_available,
             check_deepseek_cli_available,
+            check_kimi_cli_available,
             check_all_clis_available,
             list_skills,
             get_skill,
             get_config,
             set_config,
+            kimi_login,
+            kimi_logout,
+            kimi_mcp_list,
+            kimi_mcp_add,
+            kimi_mcp_remove,
+            kimi_mcp_auth,
         ])
         .on_window_event({
             let manager = manager.clone();

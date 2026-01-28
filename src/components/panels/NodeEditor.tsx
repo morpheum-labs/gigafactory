@@ -17,6 +17,7 @@ const CLI_LABELS: Record<CliType, string> = {
   gemini: 'Gemini CLI (gemini)',
   grok: 'Grok CLI (grok)',
   deepseek: 'DeepSeek CLI (deepseek)',
+  kimi: 'Kimi CLI (kimi)',
 };
 
 interface NodeEditorProps {

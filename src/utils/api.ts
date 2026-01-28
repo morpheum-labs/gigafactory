@@ -255,7 +255,7 @@ export const api = {
   /**
    * Check if a CLI is available
    */
-  async checkCliAvailable(cli: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek'): Promise<boolean> {
+  async checkCliAvailable(cli: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi'): Promise<boolean> {
     if (isTauri) {
       if (!tauriInvoke) {
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -267,6 +267,7 @@ export const api = {
         gemini: 'check_gemini_cli_available',
         grok: 'check_grok_cli_available',
         deepseek: 'check_deepseek_cli_available',
+        kimi: 'check_kimi_cli_available',
       };
       return await tauriInvoke<boolean>(commandMap[cli]);
     } else {
@@ -428,6 +429,90 @@ export const api = {
       return () => {
         wsEventListeners.delete(callback);
       };
+    }
+  },
+
+  /**
+   * Kimi CLI: Login
+   */
+  async kimiLogin(): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_login');
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
+    }
+  },
+
+  /**
+   * Kimi CLI: Logout
+   */
+  async kimiLogout(): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_logout');
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
+    }
+  },
+
+  /**
+   * Kimi CLI: List MCP servers
+   */
+  async kimiMcpList(): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_mcp_list');
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
+    }
+  },
+
+  /**
+   * Kimi CLI: Add MCP server
+   */
+  async kimiMcpAdd(serverName: string, serverUrl: string): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_mcp_add', { serverName, serverUrl });
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
+    }
+  },
+
+  /**
+   * Kimi CLI: Remove MCP server
+   */
+  async kimiMcpRemove(serverName: string): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_mcp_remove', { serverName });
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
+    }
+  },
+
+  /**
+   * Kimi CLI: Authenticate with MCP server
+   */
+  async kimiMcpAuth(serverName: string): Promise<string> {
+    if (isTauri) {
+      if (!tauriInvoke) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return await tauriInvoke<string>('kimi_mcp_auth', { serverName });
+    } else {
+      throw new Error('Kimi CLI commands are only available in Tauri mode');
     }
   },
 };

@@ -97,6 +97,7 @@ impl CapabilityManager {
             CliType::Gemini => "gemini",
             CliType::Grok => "grok",
             CliType::DeepSeek => "deepseek-cli",
+            CliType::Kimi => "kimi",
         };
         
         if !self.is_command_allowed(binary).await {

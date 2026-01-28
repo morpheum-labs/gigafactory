@@ -161,3 +161,57 @@ pub fn build_deepseek_args(config: &AgentConfig) -> (&'static str, Vec<String>) 
     
     ("deepseek-cli", args)
 }
+
+pub fn build_kimi_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
+    // Kimi CLI: https://github.com/moonshot-ai/kimi-cli
+    // Binary: `kimi`
+    // Install: npm install -g @moonshot-ai/kimi-cli
+    // Modes:
+    //   - Direct execution: `kimi -p "prompt"` (default)
+    //   - ACP server mode: `kimi acp` (runs as ACP server for IDE integration)
+    // MCP support: --mcp-config-file <path> to specify MCP server configuration
+    // Authentication: `kimi login` and `kimi logout` (handled separately)
+    // MCP management: `kimi mcp add/list/remove/auth` (handled via separate commands)
+    
+    let mode = config.kimi_mode.as_deref().unwrap_or("direct");
+    
+    if mode == "acp" {
+        // ACP server mode - runs as a server
+        let mut args = vec!["acp".to_string()];
+        
+        if let Some(mcp_config) = &config.kimi_mcp_config_file {
+            args.push("--mcp-config-file".to_string());
+            args.push(mcp_config.clone());
+        }
+        
+        ("kimi", args)
+    } else {
+        // Direct execution mode (default)
+        let mut args = vec![
+            "-p".to_string(),
+            config.prompt.clone(),
+        ];
+        
+        if let Some(model) = &config.model {
+            args.push("--model".to_string());
+            args.push(model.clone());
+        }
+        
+        if let Some(sp) = &config.system_prompt {
+            if !sp.is_empty() {
+                args.push("--system-prompt".to_string());
+                args.push(sp.clone());
+            }
+        }
+        
+        if let Some(mcp_config) = &config.kimi_mcp_config_file {
+            args.push("--mcp-config-file".to_string());
+            args.push(mcp_config.clone());
+        }
+        
+        // Note: Kimi CLI may support --output-format similar to other CLIs
+        // If it does, we can add it here for JSON streaming support
+        
+        ("kimi", args)
+    }
+}

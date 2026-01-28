@@ -1,6 +1,9 @@
 /**
- * Bézier Curve Router with Workspace Avoidance
- * Implements A*-inspired optimization for backward routing with higher-order curves
+ * Hybrid Step-Bump Bézier Router
+ * Implements optimized backward routing with hybrid step-bump algorithm
+ * Phase 1: Grid-based A* search for waypoints
+ * Phase 2: Segment classification (CRITICAL, FREE, TRANSITION)
+ * Phase 3: Hybrid curve generation (step, bump, blend)
  */
 
 import type { Workspace } from '../../types/workspace';
@@ -24,13 +27,29 @@ export interface BezierRoute {
   order: number;
   cost: number;
   clearance: number;
+  waypoints?: Point[]; // A* waypoints for hybrid routing
+  segments?: HybridSegment[]; // Classified segments
+}
+
+export interface HybridSegment {
+  start: Point;
+  end: Point;
+  type: SegmentType;
+  clearance: number;
+}
+
+export enum SegmentType {
+  CRITICAL = 'critical',    // Near workspace - use step
+  FREE = 'free',            // Far from obstacles - use bump
+  TRANSITION = 'transition' // Blend zone
 }
 
 // Configuration constants
-const MIN_CLEARANCE = 30; // Minimum distance from workspaces (increased for better visual clearance)
-const COLLISION_SAMPLES = 80; // Samples for collision detection (increased for better edge case detection)
-const OPTIMIZATION_ITERATIONS = 30; // Max iterations for gradient descent (increased for better optimization)
-const BEZIER_ORDER = 3; // Cubic Bézier (4 control points: start, cp1, cp2, end)
+const MIN_CLEARANCE = 30; // Minimum distance from workspaces
+const GRID_SIZE = 40; // Grid size for A* search
+const CLEARANCE_THRESHOLD = 80; // Threshold for segment classification
+const STEP_T = 0.5; // Step transition point (0-1)
+const MAX_ASTAR_ITERATIONS = 1000; // Max iterations for A* search
 
 /**
  * Convert workspace to bounds for collision detection
@@ -47,14 +66,57 @@ function workspaceToBounds(ws: Workspace): WorkspaceBounds {
 }
 
 /**
- * Check if a point is inside a workspace rectangle
+ * Check if there's a direct path from start to end without obstacles
  */
-function pointInBounds(point: Point, bounds: WorkspaceBounds): boolean {
+function hasDirectPath(start: Point, end: Point, workspaces: WorkspaceBounds[]): boolean {
+  // Sample points along direct line
+  const samples = 20;
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples;
+    const point: Point = {
+      x: start.x + t * (end.x - start.x),
+      y: start.y + t * (end.y - start.y),
+    };
+    for (const ws of workspaces) {
+      if (pointInBounds(point, ws, MIN_CLEARANCE)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Generate a simple direct path when no obstacles exist
+ */
+function generateDirectPath(start: Point, end: Point): BezierRoute {
+  const dx = end.x - start.x;
+  const horizontalOffset = Math.min(100, Math.abs(dx) / 2);
+  
+  const controlPoints = [
+    start,
+    { x: start.x + horizontalOffset, y: start.y },
+    { x: end.x - horizontalOffset, y: end.y },
+    end
+  ];
+  
+  return {
+    controlPoints,
+    order: 3,
+    cost: Math.sqrt(dx * dx + (end.y - start.y) ** 2),
+    clearance: Infinity,
+  };
+}
+
+/**
+ * Check if a point is inside a workspace rectangle (including margin)
+ */
+function pointInBounds(point: Point, bounds: WorkspaceBounds, margin: number = 0): boolean {
   return (
-    point.x >= bounds.x &&
-    point.x <= bounds.right &&
-    point.y >= bounds.y &&
-    point.y <= bounds.bottom
+    point.x >= bounds.x - margin &&
+    point.x <= bounds.right + margin &&
+    point.y >= bounds.y - margin &&
+    point.y <= bounds.bottom + margin
   );
 }
 
@@ -80,177 +142,505 @@ function distanceToRectangle(point: Point, bounds: WorkspaceBounds): number {
 }
 
 /**
- * Evaluate a Bézier curve at parameter t
- * Supports arbitrary order (n control points = degree n-1)
+ * Check if a point collides with any workspace (including margin)
  */
-function evaluateBezier(controlPoints: Point[], t: number): Point {
-  const n = controlPoints.length;
-  if (n === 0) return { x: 0, y: 0 };
-  if (n === 1) return controlPoints[0];
-  if (t <= 0) return controlPoints[0];
-  if (t >= 1) return controlPoints[n - 1];
-
-  // De Casteljau's algorithm for stability
-  const points = [...controlPoints];
-  for (let level = n - 1; level > 0; level--) {
-    for (let i = 0; i < level; i++) {
-      points[i] = {
-        x: (1 - t) * points[i].x + t * points[i + 1].x,
-        y: (1 - t) * points[i].y + t * points[i + 1].y,
-      };
-    }
-  }
-  return points[0];
-}
-
-/**
- * Calculate approximate length of Bézier curve
- */
-function bezierLength(controlPoints: Point[], samples: number = 20): number {
-  if (controlPoints.length < 2) return 0;
-  
-  let length = 0;
-  let prev = controlPoints[0];
-  
-  for (let i = 1; i <= samples; i++) {
-    const t = i / samples;
-    const curr = evaluateBezier(controlPoints, t);
-    const dx = curr.x - prev.x;
-    const dy = curr.y - prev.y;
-    length += Math.sqrt(dx * dx + dy * dy);
-    prev = curr;
-  }
-  
-  return length;
-}
-
-/**
- * Check if Bézier curve collides with any workspace
- * A curve "collides" if any point is inside a workspace OR within MIN_CLEARANCE distance
- */
-function curveCollides(
-  controlPoints: Point[],
-  workspaces: WorkspaceBounds[],
-  samples: number = COLLISION_SAMPLES
-): boolean {
-  if (controlPoints.length < 2) return false;
-
-  // Fast bounding box check first (expand bbox by MIN_CLEARANCE for safety)
-  const bbox = bezierBoundingBox(controlPoints);
-  const expandedBbox: WorkspaceBounds = {
-    x: bbox.x - MIN_CLEARANCE,
-    y: bbox.y - MIN_CLEARANCE,
-    width: bbox.width + 2 * MIN_CLEARANCE,
-    height: bbox.height + 2 * MIN_CLEARANCE,
-    right: bbox.right + MIN_CLEARANCE,
-    bottom: bbox.bottom + MIN_CLEARANCE,
-  };
-  if (!bboxIntersectsAny(expandedBbox, workspaces)) {
-    return false;
-  }
-
-  // Detailed sampling check - check both inside bounds AND minimum clearance
-  for (let i = 0; i <= samples; i++) {
-    const t = i / samples;
-    const point = evaluateBezier(controlPoints, t);
-    
-    for (const ws of workspaces) {
-      // Check if point is inside workspace
-      if (pointInBounds(point, ws)) {
-        return true;
-      }
-      
-      // Check if point is within MIN_CLEARANCE distance from workspace
-      const distance = distanceToRectangle(point, ws);
-      if (distance < MIN_CLEARANCE) {
-        return true;
-      }
-    }
-  }
-  
-  return false;
-}
-
-/**
- * Calculate bounding box of Bézier curve
- */
-function bezierBoundingBox(controlPoints: Point[]): WorkspaceBounds {
-  if (controlPoints.length === 0) {
-    return { x: 0, y: 0, width: 0, height: 0, right: 0, bottom: 0 };
-  }
-
-  let minX = controlPoints[0].x;
-  let minY = controlPoints[0].y;
-  let maxX = controlPoints[0].x;
-  let maxY = controlPoints[0].y;
-
-  // Check control points
-  for (const p of controlPoints) {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  }
-
-  // For cubic and higher, check extrema
-  // Simplified: sample curve for extrema
-  for (let i = 0; i <= 20; i++) {
-    const t = i / 20;
-    const p = evaluateBezier(controlPoints, t);
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  }
-
-  return {
-    x: minX,
-    y: minY,
-    width: maxX - minX,
-    height: maxY - minY,
-    right: maxX,
-    bottom: maxY,
-  };
-}
-
-/**
- * Check if bounding box intersects any workspace
- */
-function bboxIntersectsAny(
-  bbox: WorkspaceBounds,
-  workspaces: WorkspaceBounds[]
-): boolean {
+function collidesWithWorkspace(point: Point, workspaces: WorkspaceBounds[], margin: number = MIN_CLEARANCE): boolean {
   for (const ws of workspaces) {
-    if (
-      bbox.right >= ws.x &&
-      bbox.x <= ws.right &&
-      bbox.bottom >= ws.y &&
-      bbox.y <= ws.bottom
-    ) {
+    if (pointInBounds(point, ws, margin)) {
       return true;
     }
   }
   return false;
 }
 
+
 /**
- * Calculate minimum clearance from curve to workspaces
+ * Calculate minimum distance from segment to workspace
  */
-function calculateClearance(
-  controlPoints: Point[],
-  workspaces: WorkspaceBounds[],
-  samples: number = COLLISION_SAMPLES
-): number {
-  if (workspaces.length === 0) return Infinity;
-  
-  let minClearance = Infinity;
+function segmentWorkspaceDistance(p1: Point, p2: Point, workspace: WorkspaceBounds): number {
+  let minDist = Infinity;
+  const samples = 20;
   
   for (let i = 0; i <= samples; i++) {
     const t = i / samples;
-    const point = evaluateBezier(controlPoints, t);
+    const point: Point = {
+      x: p1.x + t * (p2.x - p1.x),
+      y: p1.y + t * (p2.y - p1.y),
+    };
+    const dist = distanceToRectangle(point, workspace);
+    minDist = Math.min(minDist, dist);
+  }
+  
+  return minDist;
+}
+
+/**
+ * A* Search Node for grid-based routing
+ */
+interface StepNode {
+  x: number;
+  y: number;
+  direction?: 'H' | 'V'; // Horizontal or Vertical
+  g: number; // Cost from destination
+  h: number; // Heuristic to source
+  f: number; // Total cost
+  parent: StepNode | null;
+}
+
+/**
+ * Phase 1: Grid-based A* search for backward routing
+ * Starts from destination, routes backward to source
+ */
+function backwardAStarSearch(
+  destination: Point,
+  source: Point,
+  workspaces: WorkspaceBounds[]
+): Point[] | null {
+  const openSet: StepNode[] = [];
+  const closedSet = new Set<string>();
+  
+  // Initialize with destination node
+  const startNode: StepNode = {
+    x: Math.round(destination.x / GRID_SIZE) * GRID_SIZE,
+    y: Math.round(destination.y / GRID_SIZE) * GRID_SIZE,
+    g: 0,
+    h: manhattanDistance(destination, source),
+    f: manhattanDistance(destination, source),
+    parent: null,
+  };
+  
+  openSet.push(startNode);
+  
+  let iterations = 0;
+  while (openSet.length > 0 && iterations < MAX_ASTAR_ITERATIONS) {
+    iterations++;
     
+    // Find node with lowest f-cost
+    let minIndex = 0;
+    for (let i = 1; i < openSet.length; i++) {
+      if (openSet[i].f < openSet[minIndex].f) {
+        minIndex = i;
+      }
+    }
+    
+    const current = openSet.splice(minIndex, 1)[0];
+    const key = `${current.x},${current.y}`;
+    
+    if (closedSet.has(key)) continue;
+    closedSet.add(key);
+    
+    // Check if reached source (within grid tolerance)
+    if (Math.abs(current.x - source.x) < GRID_SIZE && Math.abs(current.y - source.y) < GRID_SIZE) {
+      // Reconstruct path
+      const path: Point[] = [];
+      let node: StepNode | null = current;
+      while (node) {
+        path.unshift({ x: node.x, y: node.y });
+        node = node.parent;
+      }
+      // Add source point exactly
+      path.push(source);
+      return path;
+    }
+    
+    // Generate neighbors (axis-aligned moves only)
+    const neighbors = generateNeighbors(current, workspaces);
+    
+    for (const neighbor of neighbors) {
+      const neighborKey = `${neighbor.x},${neighbor.y}`;
+      if (closedSet.has(neighborKey)) continue;
+      
+      // Calculate costs
+      const tentativeG = current.g + movementCost(current, neighbor, workspaces);
+      
+      // Check if this neighbor is already in open set
+      const existingIndex = openSet.findIndex(n => n.x === neighbor.x && n.y === neighbor.y);
+      
+      if (existingIndex >= 0) {
+        // Already in open set, update if better path
+        if (tentativeG < openSet[existingIndex].g) {
+          openSet[existingIndex].g = tentativeG;
+          openSet[existingIndex].h = manhattanDistance(neighbor, source);
+          openSet[existingIndex].f = openSet[existingIndex].g + openSet[existingIndex].h;
+          openSet[existingIndex].parent = current;
+        }
+      } else {
+        // New node, add to open set
+        neighbor.g = tentativeG;
+        neighbor.h = manhattanDistance(neighbor, source);
+        neighbor.f = neighbor.g + neighbor.h;
+        neighbor.parent = current;
+        openSet.push(neighbor);
+      }
+    }
+  }
+  
+  return null; // No path found
+}
+
+/**
+ * Generate axis-aligned neighbor positions
+ */
+function generateNeighbors(node: StepNode, workspaces: WorkspaceBounds[]): StepNode[] {
+  const neighbors: StepNode[] = [];
+  const moves = [
+    { dx: GRID_SIZE, dy: 0, dir: 'H' as const },   // Right
+    { dx: -GRID_SIZE, dy: 0, dir: 'H' as const },  // Left
+    { dx: 0, dy: GRID_SIZE, dir: 'V' as const },  // Down
+    { dx: 0, dy: -GRID_SIZE, dir: 'V' as const }, // Up
+  ];
+  
+  for (const move of moves) {
+    const nx = node.x + move.dx;
+    const ny = node.y + move.dy;
+    
+    // Check collision with workspaces
+    if (!collidesWithWorkspace({ x: nx, y: ny }, workspaces)) {
+      neighbors.push({
+        x: nx,
+        y: ny,
+        direction: move.dir,
+        g: 0,
+        h: 0,
+        f: 0,
+        parent: null,
+      });
+    }
+  }
+  
+  return neighbors;
+}
+
+/**
+ * Calculate movement cost with penalties for direction changes and proximity
+ */
+function movementCost(current: StepNode, neighbor: StepNode, workspaces: WorkspaceBounds[]): number {
+  const baseCost = Math.abs(neighbor.x - current.x) + Math.abs(neighbor.y - current.y);
+  
+  // Penalty for direction changes (to reduce zigzag)
+  let directionPenalty = 0;
+  if (current.parent) {
+    const prevDirection = current.direction;
+    const currDirection = neighbor.direction;
+    if (prevDirection && currDirection && prevDirection !== currDirection) {
+      directionPenalty = 5;
+    }
+  }
+  
+  // Penalty for proximity to workspaces
+  let clearancePenalty = 0;
+  for (const ws of workspaces) {
+    const dist = distanceToRectangle({ x: neighbor.x, y: neighbor.y }, ws);
+    if (dist < CLEARANCE_THRESHOLD) {
+      clearancePenalty += (CLEARANCE_THRESHOLD - dist) * 2;
+    }
+  }
+  
+  return baseCost + directionPenalty + clearancePenalty;
+}
+
+/**
+ * Manhattan distance heuristic for grid-based routing
+ */
+function manhattanDistance(p1: Point, p2: Point): number {
+  return Math.abs(p1.x - p2.x) + Math.abs(p1.y - p2.y);
+}
+
+/**
+ * Simplify waypoints by removing unnecessary intermediate points
+ */
+function simplifyWaypoints(waypoints: Point[], workspaces: WorkspaceBounds[]): Point[] {
+  if (waypoints.length <= 2) return waypoints;
+  
+  const simplified: Point[] = [waypoints[0]];
+  let i = 0;
+  
+  while (i < waypoints.length - 1) {
+    let furthest = i + 1;
+    for (let j = waypoints.length - 1; j > i + 1; j--) {
+      // Check if we can skip intermediate waypoints
+      let canSkip = true;
+      for (let k = 0; k <= 10; k++) {
+        const t = k / 10;
+        const point: Point = {
+          x: waypoints[i].x + t * (waypoints[j].x - waypoints[i].x),
+          y: waypoints[i].y + t * (waypoints[j].y - waypoints[i].y),
+        };
+        for (const ws of workspaces) {
+          if (pointInBounds(point, ws, MIN_CLEARANCE)) {
+            canSkip = false;
+            break;
+          }
+        }
+        if (!canSkip) break;
+      }
+      if (canSkip) {
+        furthest = j;
+        break;
+      }
+    }
+    simplified.push(waypoints[furthest]);
+    i = furthest;
+  }
+  
+  return simplified;
+}
+
+/**
+ * Phase 2: Classify segments based on proximity to workspaces
+ */
+function classifySegments(
+  pathPoints: Point[],
+  workspaces: WorkspaceBounds[]
+): HybridSegment[] {
+  const segments: HybridSegment[] = [];
+  
+  for (let i = 0; i < pathPoints.length - 1; i++) {
+    const p1 = pathPoints[i];
+    const p2 = pathPoints[i + 1];
+    
+    // Calculate minimum clearance along segment
+    let minClearance = Infinity;
     for (const ws of workspaces) {
-      const dist = distanceToRectangle(point, ws);
+      const clearance = segmentWorkspaceDistance(p1, p2, ws);
+      minClearance = Math.min(minClearance, clearance);
+    }
+    
+    // Classify based on clearance
+    let segType: SegmentType;
+    if (minClearance < CLEARANCE_THRESHOLD * 0.5) {
+      segType = SegmentType.CRITICAL;
+    } else if (minClearance < CLEARANCE_THRESHOLD) {
+      segType = SegmentType.TRANSITION;
+    } else {
+      segType = SegmentType.FREE;
+    }
+    
+    segments.push({
+      start: p1,
+      end: p2,
+      type: segType,
+      clearance: minClearance,
+    });
+  }
+  
+  return segments;
+}
+
+/**
+ * Phase 3: Generate hybrid curve commands
+ */
+interface PathCommand {
+  type: 'L' | 'C'; // Line or Cubic Bezier
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  x3?: number;
+  y3?: number;
+}
+
+/**
+ * Generate step segment (axis-aligned)
+ */
+function generateStepSegment(p1: Point, p2: Point, t: number = STEP_T): PathCommand[] {
+  const x1 = p1.x;
+  const y1 = p1.y;
+  const x2 = p2.x;
+  const y2 = p2.y;
+  
+  if (t <= 0) {
+    // stepBefore: vertical first
+    return [
+      { type: 'L', x1: x1, y1: y2 },
+      { type: 'L', x1: x2, y1: y2 },
+    ];
+  } else if (t >= 1) {
+    // stepAfter: horizontal first
+    return [
+      { type: 'L', x1: x2, y1: y1 },
+      { type: 'L', x1: x2, y1: y2 },
+    ];
+  } else {
+    // step (midpoint)
+    const xi = x1 * (1 - t) + x2 * t;
+    return [
+      { type: 'L', x1: xi, y1: y1 },
+      { type: 'L', x1: xi, y1: y2 },
+      { type: 'L', x1: x2, y1: y2 },
+    ];
+  }
+}
+
+/**
+ * Generate bump segment (Bézier curve with horizontal tangents)
+ */
+function generateBumpSegment(p1: Point, p2: Point): PathCommand[] {
+  const x1 = p1.x;
+  const y1 = p1.y;
+  const x2 = p2.x;
+  const y2 = p2.y;
+  
+  const dx = Math.abs(x2 - x1);
+  const dy = Math.abs(y2 - y1);
+  
+  // ✅ Limit curvature to prevent wide loops
+  const cx = (x1 + x2) / 2;
+  
+  // For primarily vertical segments, use minimal vertical offset to prevent wide loops
+  const verticalOffset = dy > dx * 2 ? 0 : Math.min(dy * 0.1, 30);
+  
+  return [
+    {
+      type: 'C',
+      x1: cx, y1: y1 + verticalOffset, // Control point 1
+      x2: cx, y2: y2 + verticalOffset, // Control point 2
+      x3: x2, y3: y2, // End point
+    },
+  ];
+}
+
+/**
+ * Generate blended segment (mix of step and bump)
+ */
+function generateBlendedSegment(p1: Point, p2: Point, clearance: number): PathCommand[] {
+  // Higher clearance = more bump-like
+  const blendFactor = Math.min(1.0, clearance / CLEARANCE_THRESHOLD);
+  
+  if (blendFactor < 0.5) {
+    return generateStepSegment(p1, p2, STEP_T);
+  } else {
+    return generateBumpSegment(p1, p2);
+  }
+}
+
+/**
+ * Generate hybrid curve from classified segments
+ */
+function generateHybridCurve(segments: HybridSegment[]): PathCommand[] {
+  const commands: PathCommand[] = [];
+  
+  for (const seg of segments) {
+    let segCommands: PathCommand[];
+    
+    if (seg.type === SegmentType.CRITICAL) {
+      // Use step routing for guaranteed clearance
+      segCommands = generateStepSegment(seg.start, seg.end, STEP_T);
+    } else if (seg.type === SegmentType.FREE) {
+      // Use bumpX for smooth curves
+      segCommands = generateBumpSegment(seg.start, seg.end);
+    } else {
+      // TRANSITION: Blend step and bump
+      segCommands = generateBlendedSegment(seg.start, seg.end, seg.clearance);
+    }
+    
+    commands.push(...segCommands);
+  }
+  
+  return commands;
+}
+
+/**
+ * Convert path commands to control points for rendering
+ * This converts the hybrid step-bump commands into Bézier control points
+ */
+function commandsToControlPoints(commands: PathCommand[], start: Point): Point[] {
+  const controlPoints: Point[] = [start];
+  
+  for (const cmd of commands) {
+    if (cmd.type === 'L') {
+      // Line segment - add as point
+      if (cmd.x1 !== undefined && cmd.y1 !== undefined) {
+        controlPoints.push({ x: cmd.x1, y: cmd.y1 });
+      }
+    } else if (cmd.type === 'C') {
+      // Cubic Bézier - add control points and end point
+      if (cmd.x1 !== undefined && cmd.y1 !== undefined &&
+          cmd.x2 !== undefined && cmd.y2 !== undefined &&
+          cmd.x3 !== undefined && cmd.y3 !== undefined) {
+        // For rendering, we need to convert to standard Bézier format
+        // The current point is the start, cmd defines cp1, cp2, end
+        controlPoints.push(
+          { x: cmd.x1, y: cmd.y1 }, // cp1
+          { x: cmd.x2, y: cmd.y2 }, // cp2
+          { x: cmd.x3, y: cmd.y3 }  // end
+        );
+      }
+    }
+  }
+  
+  return controlPoints;
+}
+
+
+/**
+ * Main routing function using Hybrid Step-Bump Algorithm
+ * Phase 1: A* search for waypoints
+ * Phase 2: Classify segments
+ * Phase 3: Generate hybrid curves
+ */
+function hybridStepBumpRoute(
+  destination: Point,
+  source: Point,
+  workspaces: WorkspaceBounds[]
+): BezierRoute | null {
+  // Create expanded workspaces (excluding connection port regions)
+  const expandedWorkspaces = workspaces.map(ws => ({
+    x: ws.x - MIN_CLEARANCE,
+    y: ws.y - MIN_CLEARANCE,
+    width: ws.width + 2 * MIN_CLEARANCE,
+    height: ws.height + 2 * MIN_CLEARANCE,
+    right: ws.right + MIN_CLEARANCE,
+    bottom: ws.bottom + MIN_CLEARANCE,
+  }));
+  
+  // Phase 1: Find waypoints using A* search (backward routing)
+  // A* routes from destination to source, but we need waypoints from source to destination for rendering
+  const backwardWaypoints = backwardAStarSearch(destination, source, expandedWorkspaces);
+  
+  if (!backwardWaypoints || backwardWaypoints.length < 2) {
+    return null; // No path found
+  }
+  
+  // ✅ Simplify waypoints to remove unnecessary intermediate points
+  const simplifiedBackward = simplifyWaypoints(backwardWaypoints, workspaces);
+  
+  // Reverse waypoints to go from source to destination for rendering
+  const waypoints = [...simplifiedBackward].reverse();
+  
+  // Phase 2: Classify segments
+  const segments = classifySegments(waypoints, workspaces);
+  
+  // Phase 3: Generate hybrid curve commands
+  const commands = generateHybridCurve(segments);
+  
+  // Convert commands to control points for rendering
+  // Start from source (first waypoint)
+  const controlPoints = commandsToControlPoints(commands, waypoints[0]);
+  
+  // Calculate route metrics (use original backward waypoints for clearance calculation)
+  const clearance = calculateRouteClearance(backwardWaypoints, workspaces);
+  const cost = calculatePathCost(waypoints, segments);
+  
+  return {
+    controlPoints,
+    order: 3, // Cubic Bézier
+    cost,
+    clearance,
+    waypoints,
+    segments,
+  };
+}
+
+/**
+ * Calculate minimum clearance for entire path
+ */
+function calculateRouteClearance(waypoints: Point[], workspaces: WorkspaceBounds[]): number {
+  let minClearance = Infinity;
+  
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    for (const ws of workspaces) {
+      const dist = segmentWorkspaceDistance(waypoints[i], waypoints[i + 1], ws);
       minClearance = Math.min(minClearance, dist);
     }
   }
@@ -259,507 +649,141 @@ function calculateClearance(
 }
 
 /**
- * Calculate cost function for route optimization
+ * Calculate path cost based on length and segment types
  */
-function calculateRouteCost(
-  controlPoints: Point[],
-  workspaces: WorkspaceBounds[],
-  destination: Point
-): { cost: number; clearance: number; length: number } {
-  const length = bezierLength(controlPoints);
-  const clearance = calculateClearance(controlPoints, workspaces);
+function calculatePathCost(waypoints: Point[], segments: HybridSegment[]): number {
+  let length = 0;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const dx = waypoints[i + 1].x - waypoints[i].x;
+    const dy = waypoints[i + 1].y - waypoints[i].y;
+    length += Math.sqrt(dx * dx + dy * dy);
+  }
   
-  // Distance from last control point to destination (heuristic)
-  const lastPoint = controlPoints[controlPoints.length - 1];
-  const distanceToDest = Math.sqrt(
-    (lastPoint.x - destination.x) ** 2 + (lastPoint.y - destination.y) ** 2
-  );
+  // Penalty for critical segments (prefer smoother paths)
+  let criticalPenalty = 0;
+  for (const seg of segments) {
+    if (seg.type === SegmentType.CRITICAL) {
+      criticalPenalty += 10;
+    }
+  }
   
-  // Cost components
-  const lengthWeight = 1.0;
-  const clearanceWeight = 10.0; // Penalize low clearance
-  const distanceWeight = 0.5;
-  
-  // Penalty for insufficient clearance
-  const clearancePenalty = clearance < MIN_CLEARANCE 
-    ? (MIN_CLEARANCE - clearance) * 100 
-    : 0;
-  
-  const cost = 
-    length * lengthWeight +
-    clearancePenalty * clearanceWeight +
-    distanceToDest * distanceWeight;
-  
-  return { cost, clearance, length };
+  return length + criticalPenalty;
 }
 
 /**
- * Generate initial control points for backward routing (cubic Bézier)
- * Uses safe directions to avoid workspaces
- * Returns 4 control points: [start, cp1, cp2, end]
- */
-function generateInitialControlPoints(
-  start: Point,
-  destination: Point,
-  workspaces: WorkspaceBounds[]
-): Point[] {
-  // Calculate safe initial direction from destination
-  const dx = destination.x - start.x;
-  const dy = destination.y - start.y;
-  
-  // For backward routing, we want to curve away from workspaces
-  // Find the best vertical direction to avoid workspaces
-  let bestDirection = 0; // -1 for up, 1 for down, 0 for neutral
-  let maxClearance = 0;
-  
-  // Test upward and downward curves with multiple test points
-  for (const dir of [-1, 1]) {
-    // Test at multiple horizontal positions to find best overall clearance
-    let minDistForDirection = Infinity;
-    for (let t = 0.2; t <= 0.5; t += 0.1) {
-      const testY = start.y + dir * Math.max(100, Math.abs(dx) * 0.3);
-      const testPoint: Point = { x: start.x + dx * t, y: testY };
-      
-      let minDist = Infinity;
-      for (const ws of workspaces) {
-        const dist = distanceToRectangle(testPoint, ws);
-        minDist = Math.min(minDist, dist);
-      }
-      minDistForDirection = Math.min(minDistForDirection, minDist);
-    }
-    
-    if (minDistForDirection > maxClearance) {
-      maxClearance = minDistForDirection;
-      bestDirection = dir;
-    }
-  }
-  
-  // Generate cubic Bézier control points with minimum clearance consideration
-  const baseOffset = Math.max(
-    100, 
-    Math.abs(dx) * 0.4, 
-    MIN_CLEARANCE * 1.5
-  );
-  const verticalOffset = bestDirection * baseOffset;
-  
-  // Cubic Bézier: start, cp1, cp2, end
-  // Position control points at 1/3 and 2/3 of the way
-  const cp1X = start.x + dx * 0.33;
-  const cp1Y = start.y + dy * 0.33 + verticalOffset * 0.7; // Ease in
-  const cp2X = start.x + dx * 0.67;
-  const cp2Y = start.y + dy * 0.67 + verticalOffset * 0.7; // Ease out
-  
-  return [
-    start,
-    { x: cp1X, y: cp1Y },
-    { x: cp2X, y: cp2Y },
-    destination
-  ];
-}
-
-/**
- * Perturb control points to generate neighbors for A* search
- */
-function generateNeighbors(
-  controlPoints: Point[],
-  workspaces: WorkspaceBounds[],
-  stepSize: number = 20
-): Point[][] {
-  const neighbors: Point[][] = [];
-  
-  // Only perturb intermediate points (not start/end)
-  for (let i = 1; i < controlPoints.length - 1; i++) {
-    const directions = [
-      { x: 0, y: -stepSize }, // up
-      { x: 0, y: stepSize },  // down
-      { x: -stepSize, y: 0 }, // left
-      { x: stepSize, y: 0 },  // right
-      { x: -stepSize, y: -stepSize }, // up-left
-      { x: stepSize, y: -stepSize },  // up-right
-      { x: -stepSize, y: stepSize },  // down-left
-      { x: stepSize, y: stepSize },   // down-right
-    ];
-    
-    for (const dir of directions) {
-      const newPoints = [...controlPoints];
-      newPoints[i] = {
-        x: controlPoints[i].x + dir.x,
-        y: controlPoints[i].y + dir.y,
-      };
-      
-      // Only add if it doesn't collide (use full sample count for accuracy)
-      if (!curveCollides(newPoints, workspaces, COLLISION_SAMPLES)) {
-        neighbors.push(newPoints);
-      }
-    }
-  }
-  
-  return neighbors;
-}
-
-/**
- * Gradient descent optimization for control points
- */
-function optimizeControlPoints(
-  initialPoints: Point[],
-  workspaces: WorkspaceBounds[],
-  destination: Point,
-  iterations: number = OPTIMIZATION_ITERATIONS
-): Point[] {
-  let points = initialPoints.map(p => ({ ...p }));
-  const learningRate = 0.1;
-  let previousCost = calculateRouteCost(points, workspaces, destination).cost;
-  
-  for (let iter = 0; iter < iterations; iter++) {
-    const gradients: Point[] = new Array(points.length).fill({ x: 0, y: 0 });
-    
-    // Calculate gradients for intermediate points only
-    for (let i = 1; i < points.length - 1; i++) {
-      const epsilon = 1.0;
-      
-      // X gradient
-      const costX1 = calculateRouteCost(
-        points.map((p, idx) => idx === i ? { ...p, x: p.x - epsilon } : p),
-        workspaces,
-        destination
-      ).cost;
-      const costX2 = calculateRouteCost(
-        points.map((p, idx) => idx === i ? { ...p, x: p.x + epsilon } : p),
-        workspaces,
-        destination
-      ).cost;
-      
-      // Y gradient
-      const costY1 = calculateRouteCost(
-        points.map((p, idx) => idx === i ? { ...p, y: p.y - epsilon } : p),
-        workspaces,
-        destination
-      ).cost;
-      const costY2 = calculateRouteCost(
-        points.map((p, idx) => idx === i ? { ...p, y: p.y + epsilon } : p),
-        workspaces,
-        destination
-      ).cost;
-      
-      gradients[i] = {
-        x: (costX2 - costX1) / (2 * epsilon),
-        y: (costY2 - costY1) / (2 * epsilon),
-      };
-    }
-    
-    // Update points with gradient descent
-    for (let i = 1; i < points.length - 1; i++) {
-      points[i].x -= gradients[i].x * learningRate;
-      points[i].y -= gradients[i].y * learningRate;
-    }
-    
-    // Adaptive learning rate
-    const currentCost = calculateRouteCost(points, workspaces, destination).cost;
-    if (iter > 0 && currentCost > previousCost) {
-      // Cost increased, reduce learning rate
-      break;
-    }
-    previousCost = currentCost;
-  }
-  
-  return points;
-}
-
-/**
- * A*-inspired search for optimal cubic Bézier route
- */
-function aStarBezierSearch(
-  start: Point,
-  destination: Point,
-  workspaces: WorkspaceBounds[]
-): BezierRoute | null {
-  // Priority queue simulation using array + sort
-  interface SearchNode {
-    controlPoints: Point[];
-    g: number; // Actual cost
-    h: number; // Heuristic cost
-    f: number; // Total cost
-  }
-  
-  const openSet: SearchNode[] = [];
-  const closedSet = new Set<string>();
-  
-  // Initialize with cubic Bézier (4 control points)
-  const initialPoints = generateInitialControlPoints(
-    start,
-    destination,
-    workspaces
-  );
-  
-  const collides = curveCollides(initialPoints, workspaces);
-  const { cost } = calculateRouteCost(
-    initialPoints,
-    workspaces,
-    destination
-  );
-  
-  if (!collides) {
-    // Non-colliding initial path - add with normal cost
-    openSet.push({
-      controlPoints: initialPoints,
-      g: cost,
-      h: 0,
-      f: cost,
-    });
-  } else {
-    // Even if initial points collide, add with high penalty
-    // This allows the algorithm to optimize them into valid paths
-    const collisionPenalty = 10000;
-    openSet.push({
-      controlPoints: initialPoints,
-      g: cost + collisionPenalty,
-      h: collisionPenalty,
-      f: cost + collisionPenalty * 2,
-    });
-  }
-  
-  // If we still have no valid starting points, the initial generation failed
-  // This shouldn't happen often, but if it does, return null
-  if (openSet.length === 0) {
-    return null;
-  }
-  
-  // Sort by f-cost (A* priority)
-  openSet.sort((a, b) => a.f - b.f);
-  
-  let bestSolution: SearchNode | null = null;
-  let bestClearance = 0;
-  const maxIterations = 50;
-  let iterations = 0;
-  
-  while (openSet.length > 0 && iterations < maxIterations) {
-    iterations++;
-    const current = openSet.shift()!;
-    
-    // Create key for closed set
-    const key = current.controlPoints
-      .map(p => `${Math.round(p.x)},${Math.round(p.y)}`)
-      .join('|');
-    
-    if (closedSet.has(key)) continue;
-    closedSet.add(key);
-    
-    // Check if this is a valid solution
-    const clearance = calculateClearance(current.controlPoints, workspaces);
-    if (clearance >= MIN_CLEARANCE) {
-      // Valid solution found
-      return {
-        controlPoints: current.controlPoints,
-        order: BEZIER_ORDER,
-        cost: current.f,
-        clearance,
-      };
-    }
-    
-    // Track best solution so far
-    if (clearance > bestClearance) {
-      bestClearance = clearance;
-      bestSolution = current;
-    }
-    
-    // Generate neighbors
-    const neighbors = generateNeighbors(
-      current.controlPoints,
-      workspaces,
-      15
-    );
-    
-    for (const neighborPoints of neighbors) {
-      const neighborKey = neighborPoints
-        .map(p => `${Math.round(p.x)},${Math.round(p.y)}`)
-        .join('|');
-      
-      if (closedSet.has(neighborKey)) continue;
-      
-      // Double-check collision before adding (generateNeighbors already checks, but be extra safe)
-      if (curveCollides(neighborPoints, workspaces)) {
-        continue; // Skip colliding neighbors
-      }
-      
-      const { cost, clearance: neighborClearance } = calculateRouteCost(
-        neighborPoints,
-        workspaces,
-        destination
-      );
-      
-      // Heuristic: prefer higher clearance
-      const h = neighborClearance < MIN_CLEARANCE 
-        ? (MIN_CLEARANCE - neighborClearance) * 50 
-        : 0;
-      
-      openSet.push({
-        controlPoints: neighborPoints,
-        g: cost,
-        h,
-        f: cost + h,
-      });
-    }
-    
-    // Re-sort after adding neighbors
-    openSet.sort((a, b) => a.f - b.f);
-  }
-  
-  // Return best solution found, but ONLY if it doesn't collide and has reasonable clearance
-  if (bestSolution) {
-    // Verify best solution doesn't collide
-    if (curveCollides(bestSolution.controlPoints, workspaces)) {
-      // Best solution still collides - try optimization to fix it
-      const optimized = optimizeControlPoints(
-        bestSolution.controlPoints,
-        workspaces,
-        destination,
-        20
-      );
-      
-      // Check if optimization fixed the collision
-      if (!curveCollides(optimized, workspaces)) {
-        const clearance = calculateClearance(optimized, workspaces);
-        // Only return if clearance is reasonable (at least 50% of minimum)
-        if (clearance >= MIN_CLEARANCE * 0.5) {
-          return {
-            controlPoints: optimized,
-            order: BEZIER_ORDER,
-            cost: calculateRouteCost(optimized, workspaces, destination).cost,
-            clearance,
-          };
-        }
-      }
-      // If optimization didn't help, return null (no valid path found)
-      return null;
-    }
-    
-    // Best solution doesn't collide, but check clearance
-    const clearance = calculateClearance(bestSolution.controlPoints, workspaces);
-    if (clearance < MIN_CLEARANCE * 0.5) {
-      // Clearance too low, try optimization
-      const optimized = optimizeControlPoints(
-        bestSolution.controlPoints,
-        workspaces,
-        destination,
-        20
-      );
-      
-      if (!curveCollides(optimized, workspaces)) {
-        const optimizedClearance = calculateClearance(optimized, workspaces);
-        if (optimizedClearance >= MIN_CLEARANCE * 0.5) {
-          return {
-            controlPoints: optimized,
-            order: BEZIER_ORDER,
-            cost: calculateRouteCost(optimized, workspaces, destination).cost,
-            clearance: optimizedClearance,
-          };
-        }
-      }
-      // Still not good enough
-      return null;
-    }
-    
-    // Best solution is good, optimize it further
-    const optimized = optimizeControlPoints(
-      bestSolution.controlPoints,
-      workspaces,
-      destination,
-      10
-    );
-    
-    // Verify optimization didn't introduce collisions
-    if (!curveCollides(optimized, workspaces)) {
-      const optimizedClearance = calculateClearance(optimized, workspaces);
-      return {
-        controlPoints: optimized,
-        order: BEZIER_ORDER,
-        cost: calculateRouteCost(optimized, workspaces, destination).cost,
-        clearance: optimizedClearance,
-      };
-    }
-    
-    // Optimization introduced collision, return original
-    return {
-      controlPoints: bestSolution.controlPoints,
-      order: BEZIER_ORDER,
-      cost: bestSolution.f,
-      clearance,
-    };
-  }
-  
-  return null;
-}
-
-/**
- * Main routing function: Find optimal Bézier curve avoiding workspaces
+ * Main routing function: Find optimal hybrid step-bump curve avoiding workspaces
+ * Uses backward routing (from destination to source) with hybrid step-bump algorithm
  */
 export function routeBezierCurve(
   start: Point,
   destination: Point,
-  allWorkspaces: Record<string, Workspace>,
-  excludeWorkspaceIds: string[] = []
+  allWorkspaces: Record<string, Workspace>
 ): BezierRoute | null {
-  // Convert workspaces to bounds, excluding source/destination
+  // Convert ALL workspaces to bounds (don't exclude any - we need to avoid them all)
   const workspaceBounds: WorkspaceBounds[] = [];
   
   for (const ws of Object.values(allWorkspaces)) {
-    if (!excludeWorkspaceIds.includes(ws.id)) {
-      workspaceBounds.push(workspaceToBounds(ws));
-    }
+    workspaceBounds.push(workspaceToBounds(ws));
   }
   
-  // Run A* search
-  return aStarBezierSearch(start, destination, workspaceBounds);
+  // ✅ Check for direct path first - avoid unnecessary A* search
+  if (hasDirectPath(start, destination, workspaceBounds)) {
+    return generateDirectPath(start, destination);
+  }
+  
+  // Otherwise use hybrid algorithm
+  // Use hybrid step-bump routing (backward: from destination to source)
+  // The grid-based A* will naturally route to the destination point
+  return hybridStepBumpRoute(destination, start, workspaceBounds);
 }
 
 /**
- * Convert cubic Bézier control points to rendering format
- * Since we only use cubic Bézier, this is a simple conversion
+ * Convert hybrid step-bump control points to cubic Bézier segments for rendering
+ * The control points may contain a mix of line segments and Bézier curves
  */
 export function bezierToCubicSegments(
   controlPoints: Point[]
 ): Array<{ cp1: Point; cp2: Point; end: Point }> {
-  // We always use cubic Bézier (4 control points)
-  if (controlPoints.length === 4) {
-    return [{
-      cp1: controlPoints[1],
-      cp2: controlPoints[2],
-      end: controlPoints[3],
-    }];
+  if (controlPoints.length < 2) {
+    return [];
   }
   
-  // Fallback for edge cases (shouldn't happen, but handle gracefully)
-  if (controlPoints.length === 3) {
-    // Quadratic - approximate as cubic
-    const p0 = controlPoints[0];
-    const p1 = controlPoints[1];
-    const p2 = controlPoints[2];
-    return [{
-      cp1: {
-        x: p0.x + (2/3) * (p1.x - p0.x),
-        y: p0.y + (2/3) * (p1.y - p0.y),
-      },
-      cp2: {
-        x: p2.x + (2/3) * (p1.x - p2.x),
-        y: p2.y + (2/3) * (p1.y - p2.y),
-      },
-      end: p2,
-    }];
-  }
+  const segments: Array<{ cp1: Point; cp2: Point; end: Point }> = [];
+  let i = 0;
   
-  if (controlPoints.length === 2) {
-    // Linear - approximate as cubic
-    const mid = {
-      x: (controlPoints[0].x + controlPoints[1].x) / 2,
-      y: (controlPoints[0].y + controlPoints[1].y) / 2,
+  while (i < controlPoints.length - 1) {
+    const start = controlPoints[i];
+    const end = controlPoints[i + 1];
+    
+    // Check if this is a Bézier segment (has 2 control points before end)
+    if (i + 3 < controlPoints.length) {
+      // This might be a cubic Bézier (4 points: start, cp1, cp2, end)
+      const cp1 = controlPoints[i + 1];
+      const cp2 = controlPoints[i + 2];
+      const bezierEnd = controlPoints[i + 3];
+      
+      // Verify this is actually a Bézier by checking if cp1 and cp2 are not on the line
+      const isBezier = !isPointOnLine(start, bezierEnd, cp1) || !isPointOnLine(start, bezierEnd, cp2);
+      
+      if (isBezier) {
+        segments.push({
+          cp1,
+          cp2,
+          end: bezierEnd,
+        });
+        i += 4; // Skip to next segment
+        continue;
+      }
+    }
+    
+    // Linear segment - convert to cubic Bézier with control points on the line
+    const mid1 = {
+      x: start.x + (end.x - start.x) / 3,
+      y: start.y + (end.y - start.y) / 3,
     };
-    return [{
-      cp1: mid,
-      cp2: mid,
-      end: controlPoints[1],
-    }];
+    const mid2 = {
+      x: start.x + 2 * (end.x - start.x) / 3,
+      y: start.y + 2 * (end.y - start.y) / 3,
+    };
+    
+    segments.push({
+      cp1: mid1,
+      cp2: mid2,
+      end,
+    });
+    
+    i += 2; // Move to next segment
   }
   
-  // Invalid - return empty array
-  return [];
+  return segments;
+}
+
+/**
+ * Check if a point is on a line segment
+ */
+function isPointOnLine(p1: Point, p2: Point, p: Point, tolerance: number = 1): boolean {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  
+  if (dist < tolerance) return true;
+  
+  // Distance from point to line
+  const A = p.x - p1.x;
+  const B = p.y - p1.y;
+  const C = p2.x - p1.x;
+  const D = p2.y - p1.y;
+  
+  const dot = A * C + B * D;
+  const lenSq = C * C + D * D;
+  const param = lenSq !== 0 ? dot / lenSq : -1;
+  
+  if (param < 0 || param > 1) return false;
+  
+  const xx = p1.x + param * C;
+  const yy = p1.y + param * D;
+  const dx2 = p.x - xx;
+  const dy2 = p.y - yy;
+  
+  return Math.sqrt(dx2 * dx2 + dy2 * dy2) < tolerance;
 }

@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 pub type AgentId = String;
 pub type WorkspaceId = String;
 
-/// CLI backend: Claude (`claude`), Cursor Agent (`agent`), Kilo (`kilo`), Gemini (`gemini`), Grok (`grok`), or DeepSeek (`deepseek`).
+/// CLI backend: Claude (`claude`), Cursor Agent (`agent`), Kilo (`kilo`), Gemini (`gemini`), Grok (`grok`), DeepSeek (`deepseek`), or Kimi (`kimi`).
 /// See: https://cursor.com/docs/cli/overview
 /// See: https://github.com/Kilo-Org/kilocode
 /// See: https://github.com/google-gemini/gemini-cli
 /// See: https://github.com/superagent-ai/grok-cli
 /// See: https://github.com/morpheum-labs/deepseek-cli (Go build from gosrc/)
+/// See: https://github.com/moonshot-ai/kimi-cli
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CliType {
@@ -19,6 +20,7 @@ pub enum CliType {
     Gemini,
     Grok,
     DeepSeek,
+    Kimi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,9 +28,15 @@ pub enum CliType {
 pub struct AgentConfig {
     pub workspace_id: WorkspaceId,
     pub prompt: String,
-    /// Which CLI to use: `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, or `deepseek`.
+    /// Which CLI to use: `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`.
     #[serde(default)]
     pub cli: Option<CliType>,
+    /// Kimi-only: Running mode - `acp` (ACP server mode) or direct execution. Defaults to direct execution.
+    #[serde(default)]
+    pub kimi_mode: Option<String>,
+    /// Kimi-only: Path to MCP configuration file (--mcp-config-file)
+    #[serde(default)]
+    pub kimi_mcp_config_file: Option<String>,
     /// Cursor-only: `agent` (default), `plan`, or `ask`. Ignored for Claude and Kilo.
     #[serde(default)]
     pub mode: Option<String>,

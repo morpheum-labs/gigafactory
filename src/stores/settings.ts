@@ -29,6 +29,7 @@ const defaultSettings: AppSettings = {
   agentEnabled_gemini: true,
   agentEnabled_grok: true,
   agentEnabled_deepseek: true,
+  agentEnabled_kimi: true,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -61,7 +62,7 @@ export const useSettingsStore = create<SettingsState>()(
 );
 
 // Constants for CLI management
-const ALL_CLIS: CliType[] = ['claude', 'cursor', 'kilo', 'gemini', 'grok', 'deepseek'] as const;
+const ALL_CLIS: CliType[] = ['claude', 'cursor', 'kilo', 'gemini', 'grok', 'deepseek', 'kimi'] as const;
 
 /**
  * Custom hook that provides reactive access to enabled CLIs.

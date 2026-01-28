@@ -138,6 +138,17 @@ pub async fn check_deepseek_cli_available() -> Result<bool, String> {
     }
 }
 
+/// Check if the Kimi CLI (`kimi`) is available.
+/// Install: npm install -g @moonshot-ai/kimi-cli
+/// See: https://github.com/moonshot-ai/kimi-cli
+#[tauri::command]
+pub async fn check_kimi_cli_available() -> Result<bool, String> {
+    match Command::new("kimi").arg("--version").output().await {
+        Ok(output) => Ok(output.status.success()),
+        Err(_) => Ok(false),
+    }
+}
+
 /// Check all CLIs availability at once
 #[tauri::command]
 pub async fn check_all_clis_available() -> Result<HashMap<String, bool>, String> {
@@ -148,6 +159,7 @@ pub async fn check_all_clis_available() -> Result<HashMap<String, bool>, String>
         ("gemini", "gemini"),
         ("grok", "grok"),
         ("deepseek", "deepseek-cli"),
+        ("kimi", "kimi"),
     ];
 
     // Check all CLIs in parallel
@@ -336,4 +348,112 @@ pub async fn get_config() -> Result<AppConfig, String> {
 pub async fn set_config(config: AppConfig) -> Result<AppConfig, String> {
     config.save()?;
     Ok(config)
+}
+
+// ===== Kimi CLI Management Commands =====
+
+/// Execute Kimi CLI login command
+#[tauri::command]
+pub async fn kimi_login() -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("login")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi login: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// Execute Kimi CLI logout command
+#[tauri::command]
+pub async fn kimi_logout() -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("logout")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi logout: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// List MCP servers configured for Kimi CLI
+#[tauri::command]
+pub async fn kimi_mcp_list() -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("mcp")
+        .arg("list")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi mcp list: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// Add an MCP server to Kimi CLI
+/// server_name: Name of the MCP server (e.g., "context7", "linear")
+/// server_url: URL or path to the MCP server
+#[tauri::command]
+pub async fn kimi_mcp_add(server_name: String, server_url: String) -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("mcp")
+        .arg("add")
+        .arg(&server_name)
+        .arg(&server_url)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi mcp add: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// Remove an MCP server from Kimi CLI
+#[tauri::command]
+pub async fn kimi_mcp_remove(server_name: String) -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("mcp")
+        .arg("remove")
+        .arg(&server_name)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi mcp remove: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// Authenticate with an MCP server
+#[tauri::command]
+pub async fn kimi_mcp_auth(server_name: String) -> Result<String, String> {
+    let output = Command::new("kimi")
+        .arg("mcp")
+        .arg("auth")
+        .arg(&server_name)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute kimi mcp auth: {}", e))?;
+    
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }

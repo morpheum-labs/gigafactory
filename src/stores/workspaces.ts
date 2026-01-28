@@ -20,6 +20,8 @@ interface WorkspacesState {
   setModel: (workspaceId: string, model: ModelId) => void;
   setCli: (workspaceId: string, cli: CliType) => void;
   setMode: (workspaceId: string, mode: string | null) => void;
+  setKimiMode: (workspaceId: string, mode: string | null) => void;
+  setKimiMcpConfigFile: (workspaceId: string, configFile: string | null) => void;
 
   // Workflow methods
   setTaskTemplate: (workspaceId: string, template: string | null) => void;
@@ -177,6 +179,22 @@ export const useWorkspacesStore = create<WorkspacesState>()(
       set((state) => {
         if (state.workspaces[workspaceId]) {
           state.workspaces[workspaceId].mode = mode ?? undefined;
+        }
+      });
+    },
+
+    setKimiMode: (workspaceId: string, mode: string | null) => {
+      set((state) => {
+        if (state.workspaces[workspaceId]) {
+          state.workspaces[workspaceId].kimiMode = mode ?? undefined;
+        }
+      });
+    },
+
+    setKimiMcpConfigFile: (workspaceId: string, configFile: string | null) => {
+      set((state) => {
+        if (state.workspaces[workspaceId]) {
+          state.workspaces[workspaceId].kimiMcpConfigFile = configFile ?? undefined;
         }
       });
     },

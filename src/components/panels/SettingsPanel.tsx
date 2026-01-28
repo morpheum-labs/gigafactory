@@ -14,6 +14,7 @@ const AGENT_CLIS: { id: CliType; label: string; icon: string }[] = [
   { id: 'gemini', label: 'Gemini', icon: '💎' },
   { id: 'grok', label: 'Grok', icon: '🚀' },
   { id: 'deepseek', label: 'DeepSeek', icon: '🔍' },
+  { id: 'kimi', label: 'Kimi', icon: '🌙' },
 ];
 
 export function SettingsPanel() {

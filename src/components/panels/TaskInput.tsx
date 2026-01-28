@@ -12,7 +12,7 @@ export function TaskInput() {
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { selectedWorkspaceId, cliAvailable, cursorCliAvailable, kiloCliAvailable, geminiCliAvailable, grokCliAvailable, deepseekCliAvailable } = useUIStore();
+  const { selectedWorkspaceId, cliAvailable, cursorCliAvailable, kiloCliAvailable, geminiCliAvailable, grokCliAvailable, deepseekCliAvailable, kimiCliAvailable } = useUIStore();
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const agents = useAgentsStore((s) => s.agents);
   const { skills, loadSkills } = useSkillsStore();
@@ -78,9 +78,10 @@ export function TaskInput() {
         const useGemini = cliType === 'gemini';
         const useGrok = cliType === 'grok';
         const useDeepseek = cliType === 'deepseek';
-        const ok = useCursor ? cursorCliAvailable : useKilo ? kiloCliAvailable : useGemini ? geminiCliAvailable : useGrok ? grokCliAvailable : useDeepseek ? deepseekCliAvailable : cliAvailable;
+        const useKimi = cliType === 'kimi';
+        const ok = useCursor ? cursorCliAvailable : useKilo ? kiloCliAvailable : useGemini ? geminiCliAvailable : useGrok ? grokCliAvailable : useDeepseek ? deepseekCliAvailable : useKimi ? kimiCliAvailable : cliAvailable;
         // Only hide warning if CLI is confirmed available (true) or all checks are still pending (null)
-        if (ok === true || (cliAvailable === null && cursorCliAvailable === null && kiloCliAvailable === null && geminiCliAvailable === null && grokCliAvailable === null && deepseekCliAvailable === null)) return null;
+        if (ok === true || (cliAvailable === null && cursorCliAvailable === null && kiloCliAvailable === null && geminiCliAvailable === null && grokCliAvailable === null && deepseekCliAvailable === null && kimiCliAvailable === null)) return null;
         return (
           <div className="mb-3 p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-300">
             {useCursor
@@ -93,6 +94,8 @@ export function TaskInput() {
               ? 'Grok CLI (grok) not found. Install: bun add -g @vibe-kit/grok-cli or npm install -g @vibe-kit/grok-cli'
               : useDeepseek
               ? 'DeepSeek CLI (deepseek) not found. Install: Build from Go source - make gosrc-build && make goinstall (see https://github.com/morpheum-labs/deepseek-cli)'
+              : useKimi
+              ? 'Kimi CLI (kimi) not found. Install: npm install -g @moonshot-ai/kimi-cli'
               : 'Claude CLI not found. Install it first.'}
           </div>
         );
@@ -181,6 +184,8 @@ export function TaskInput() {
                   ? !grokCliAvailable
                   : workspace?.cli === 'deepseek'
                   ? !deepseekCliAvailable
+                  : workspace?.cli === 'kimi'
+                  ? !kimiCliAvailable
                   : !cliAvailable)
               }
               size="sm"

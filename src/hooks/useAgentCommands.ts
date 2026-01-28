@@ -47,7 +47,7 @@ export function useAgentCommands() {
     async (
       workspaceId: string,
       prompt: string,
-      options?: { allowedTools?: string[]; useWorkflowInputs?: boolean; cli?: 'claude' | 'cursor' | 'kilo' | 'gemini'; mode?: string }
+      options?: { allowedTools?: string[]; useWorkflowInputs?: boolean; cli?: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi'; mode?: string }
     ) => {
       try {
         // Check if there's an existing agent for this workspace
@@ -78,6 +78,8 @@ export function useAgentCommands() {
           prompt: finalPrompt,
           cli: options?.cli ?? workspace?.cli,
           mode: options?.mode ?? workspace?.mode,
+          kimiMode: workspace?.kimiMode || undefined,
+          kimiMcpConfigFile: workspace?.kimiMcpConfigFile || undefined,
           allowedTools: options?.allowedTools,
           workingDirectory: workspaceDirectory,
           systemPrompt: workspace?.systemPrompt || undefined,

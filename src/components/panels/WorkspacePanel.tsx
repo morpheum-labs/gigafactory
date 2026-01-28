@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWorkspacesStore } from '../../stores/workspaces';
 import { useAgentsStore } from '../../stores/agents';
 import { useUIStore } from '../../stores/ui';
@@ -11,6 +11,7 @@ import { ProgressBar } from '../common/ProgressBar';
 import { WORKSPACE_EMOJIS } from '../../utils/emoji';
 import { AGENT_EMOJIS } from '../../utils/emoji';
 import { AVAILABLE_MODELS, ModelId, CliType } from '../../types/workspace';
+import { api } from '../../utils/api';
 
 const CLI_LABELS: Record<CliType, string> = {
   claude: 'Claude (claude)',
@@ -19,6 +20,7 @@ const CLI_LABELS: Record<CliType, string> = {
   gemini: 'Gemini CLI (gemini)',
   grok: 'Grok CLI (grok)',
   deepseek: 'DeepSeek CLI (deepseek)',
+  kimi: 'Kimi CLI (kimi)',
 };
 
 const WORKFLOW_SECTION_STYLE = "mb-5 p-4 bg-gray-800/50 rounded-lg border border-gray-700";
@@ -32,6 +34,8 @@ export function WorkspacePanel() {
     setModel,
     setCli,
     setMode,
+    setKimiMode,
+    setKimiMcpConfigFile,
     setTaskTemplate,
     setAutoRun,
     connectWorkspaces,
@@ -47,6 +51,11 @@ export function WorkspacePanel() {
   const [editingPrompt, setEditingPrompt] = useState('');
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState('');
+  const [showMcpManagement, setShowMcpManagement] = useState(false);
+  const [mcpServers, setMcpServers] = useState<string>('');
+  const [loadingMcp, setLoadingMcp] = useState(false);
+  const [newMcpName, setNewMcpName] = useState('');
+  const [newMcpUrl, setNewMcpUrl] = useState('');
 
   const workspace = selectedWorkspaceId ? workspaces[selectedWorkspaceId] : null;
   const agent = workspace?.agentId ? agents[workspace.agentId] : null;
@@ -55,6 +64,26 @@ export function WorkspacePanel() {
   const clisToShow = availableAndEnabledClis.includes(currentCli as CliType)
     ? availableAndEnabledClis
     : [...availableAndEnabledClis, currentCli as CliType];
+
+  const loadMcpServers = async () => {
+    setLoadingMcp(true);
+    try {
+      const output = await api.kimiMcpList();
+      setMcpServers(output);
+    } catch (error) {
+      console.error('Failed to load MCP servers:', error);
+      setMcpServers('Error loading MCP servers');
+    } finally {
+      setLoadingMcp(false);
+    }
+  };
+
+  // Load MCP servers list when panel opens for Kimi workspace
+  useEffect(() => {
+    if (workspace?.cli === 'kimi' && showMcpManagement) {
+      loadMcpServers();
+    }
+  }, [workspace?.cli, showMcpManagement]);
 
   if (!workspace) {
     return (
@@ -81,6 +110,40 @@ export function WorkspacePanel() {
   const handleDelete = async () => {
     if (confirm('Delete this workspace? Any running task will be stopped.')) {
       await deleteWorkspace(workspace.id);
+    }
+  };
+
+  const handleAddMcpServer = async () => {
+    if (!newMcpName.trim() || !newMcpUrl.trim()) return;
+    try {
+      await api.kimiMcpAdd(newMcpName.trim(), newMcpUrl.trim());
+      setNewMcpName('');
+      setNewMcpUrl('');
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to add MCP server:', error);
+      alert(`Failed to add MCP server: ${error}`);
+    }
+  };
+
+  const handleRemoveMcpServer = async (serverName: string) => {
+    if (!confirm(`Remove MCP server "${serverName}"?`)) return;
+    try {
+      await api.kimiMcpRemove(serverName);
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to remove MCP server:', error);
+      alert(`Failed to remove MCP server: ${error}`);
+    }
+  };
+
+  const handleAuthMcpServer = async (serverName: string) => {
+    try {
+      await api.kimiMcpAuth(serverName);
+      alert(`Authentication initiated for "${serverName}". Check the terminal for prompts.`);
+    } catch (error) {
+      console.error('Failed to authenticate MCP server:', error);
+      alert(`Failed to authenticate MCP server: ${error}`);
     }
   };
 
@@ -202,6 +265,147 @@ export function WorkspacePanel() {
             <option value="ask">Ask</option>
           </select>
           <p className="text-xs text-gray-500 mt-1">Agent: full tools. Plan: design first. Ask: read-only.</p>
+        </div>
+      )}
+
+      {(workspace.cli ?? 'claude') === 'kimi' && (
+        <>
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-gray-400 mb-2">
+              Kimi mode
+            </label>
+            <select
+              value={workspace.kimiMode ?? 'direct'}
+              onChange={(e) => setKimiMode(workspace.id, e.target.value || null)}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-4 py-3 text-base text-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="direct">Direct execution (default)</option>
+              <option value="acp">ACP server mode</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Direct: Run tasks directly. ACP: Run as ACP server for IDE integration.
+            </p>
+          </div>
+          <div className="mb-5">
+            <label className="block text-sm font-medium text-gray-400 mb-2">
+              MCP Config File (optional)
+            </label>
+            <input
+              type="text"
+              value={workspace.kimiMcpConfigFile ?? ''}
+              onChange={(e) => setKimiMcpConfigFile(workspace.id, e.target.value || null)}
+              placeholder="/path/to/mcp-config.json"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-4 py-3 text-base text-white focus:border-blue-500 focus:outline-none"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Path to MCP configuration file (--mcp-config-file)
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* MCP Management for Kimi */}
+      {(workspace.cli ?? 'claude') === 'kimi' && (
+        <div className="mb-5">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-400">
+              MCP Server Management
+            </label>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                if (!showMcpManagement) {
+                  loadMcpServers();
+                }
+                setShowMcpManagement(!showMcpManagement);
+              }}
+            >
+              {showMcpManagement ? 'Hide' : 'Manage'}
+            </Button>
+          </div>
+          {showMcpManagement && (
+            <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700 space-y-4">
+              {/* List MCP Servers */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-2">
+                  Configured MCP Servers
+                </label>
+                {loadingMcp ? (
+                  <p className="text-sm text-gray-500">Loading...</p>
+                ) : (
+                  <div className="bg-gray-900 rounded p-3 text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-32 overflow-auto">
+                    {mcpServers || 'No MCP servers configured'}
+                  </div>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={loadMcpServers}
+                  className="mt-2"
+                  disabled={loadingMcp}
+                >
+                  Refresh List
+                </Button>
+              </div>
+
+              {/* Add MCP Server */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-2">
+                  Add MCP Server
+                </label>
+                <div className="space-y-2">
+                  <Input
+                    type="text"
+                    value={newMcpName}
+                    onChange={(e) => setNewMcpName(e.target.value)}
+                    placeholder="Server name (e.g., context7)"
+                    className="text-sm"
+                  />
+                  <Input
+                    type="text"
+                    value={newMcpUrl}
+                    onChange={(e) => setNewMcpUrl(e.target.value)}
+                    placeholder="Server URL or path"
+                    className="text-sm"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleAddMcpServer}
+                    disabled={!newMcpName.trim() || !newMcpUrl.trim()}
+                  >
+                    Add Server
+                  </Button>
+                </div>
+              </div>
+
+              {/* Authentication */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-2">
+                  Authentication
+                </label>
+                <div className="flex space-x-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => api.kimiLogin().then(() => alert('Login initiated. Check terminal for prompts.')).catch((e) => alert(`Login failed: ${e}`))}
+                  >
+                    Login
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => api.kimiLogout().then(() => alert('Logged out successfully.')).catch((e) => alert(`Logout failed: ${e}`))}
+                  >
+                    Logout
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Use Login/Logout to manage your Kimi CLI authentication session.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

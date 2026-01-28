@@ -31,18 +31,22 @@ export interface LogEntry {
   toolInput?: Record<string, unknown>;
 }
 
-/** CLI backend: `claude` (default), `cursor` (Cursor Agent CLI), `kilo` (Kilo Code CLI), `gemini` (Gemini CLI), `grok` (Grok CLI), or `deepseek` (DeepSeek CLI). */
-export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek';
+/** CLI backend: `claude` (default), `cursor` (Cursor Agent CLI), `kilo` (Kilo Code CLI), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), or `kimi` (Kimi CLI). */
+export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi';
 
 export type AgentId = string;
 
 export interface AgentConfig {
   workspaceId: string;
   prompt: string;
-  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, or `deepseek`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/morpheum-labs/deepseek-cli */
+  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/morpheum-labs/deepseek-cli, https://github.com/moonshot-ai/kimi-cli */
   cli?: CliType;
   /** Cursor-only: `agent`, `plan`, or `ask`. Ignored for Claude and Kilo. */
   mode?: string;
+  /** Kimi-only: `acp` (ACP server mode) or `direct` (default). */
+  kimiMode?: string;
+  /** Kimi-only: Path to MCP configuration file. */
+  kimiMcpConfigFile?: string;
   allowedTools?: string[];
   workingDirectory?: string;
   systemPrompt?: string;

@@ -105,8 +105,7 @@ export function renderConnections(
         const route = routeBezierCurve(
           start,
           destination,
-          workspaces,
-          [fromWs.id, toWs.id] // Exclude source and destination workspaces
+          workspaces
         );
         
         if (route && route.controlPoints.length > 0) {
@@ -285,8 +284,7 @@ export function renderConnections(
         const route = routeBezierCurve(
           start,
           destination,
-          workspaces,
-          [fromWs.id] // Exclude source workspace
+          workspaces
         );
         
         if (route && route.controlPoints.length > 0) {

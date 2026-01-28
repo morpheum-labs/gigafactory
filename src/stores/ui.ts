@@ -24,6 +24,7 @@ interface UIState {
   geminiCliAvailable: boolean | null;
   grokCliAvailable: boolean | null;
   deepseekCliAvailable: boolean | null;
+  kimiCliAvailable: boolean | null;
   outputModalAgentId: string | null;
   editingWorkspaceId: string | null; // For inline name editing
   positionEditWorkspaceId: string | null; // For position editing mode
@@ -41,6 +42,7 @@ interface UIState {
   setGeminiCliAvailable: (available: boolean) => void;
   setGrokCliAvailable: (available: boolean) => void;
   setDeepseekCliAvailable: (available: boolean) => void;
+  setKimiCliAvailable: (available: boolean) => void;
   showOutputModal: (agentId: string | null) => void;
   setEditingWorkspace: (workspaceId: string | null) => void;
   setPositionEditWorkspace: (workspaceId: string | null) => void;
@@ -63,6 +65,7 @@ export const useUIStore = create<UIState>()(
     geminiCliAvailable: null,
     grokCliAvailable: null,
     deepseekCliAvailable: null,
+    kimiCliAvailable: null,
     outputModalAgentId: null,
     editingWorkspaceId: null,
     positionEditWorkspaceId: null,
@@ -144,6 +147,12 @@ export const useUIStore = create<UIState>()(
     setDeepseekCliAvailable: (available: boolean) => {
       set((state) => {
         state.deepseekCliAvailable = available;
+      });
+    },
+
+    setKimiCliAvailable: (available: boolean) => {
+      set((state) => {
+        state.kimiCliAvailable = available;
       });
     },
 

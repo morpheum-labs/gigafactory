@@ -5,10 +5,13 @@ export type ModelId =
   | 'claude-opus-4-20250514' 
   | 'claude-3-5-haiku-20241022'
   | 'deepseek-chat'
-  | 'deepseek-reasoner';
+  | 'deepseek-reasoner'
+  | 'moonshot-v1-8k'
+  | 'moonshot-v1-32k'
+  | 'moonshot-v1-128k';
 
-/** CLI backend: `claude`, `cursor` (Cursor Agent), `kilo` (Kilo Code), `gemini` (Gemini CLI), `grok` (Grok CLI), or `deepseek` (DeepSeek CLI). */
-export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek';
+/** CLI backend: `claude`, `cursor` (Cursor Agent), `kilo` (Kilo Code), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), or `kimi` (Kimi CLI). */
+export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi';
 
 export interface WorkspaceConnection {
   fromId: string;      // Source workspace ID
@@ -29,10 +32,14 @@ export interface Workspace {
   createdAt: number;
   systemPrompt: string | null;
   model: ModelId;
-  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, or `deepseek`. */
+  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`. */
   cli?: CliType;
   /** Cursor-only: `agent`, `plan`, or `ask`. Ignored for Claude and Kilo. */
   mode?: string;
+  /** Kimi-only: `acp` (ACP server mode) or `direct` (default). */
+  kimiMode?: string;
+  /** Kimi-only: Path to MCP configuration file. */
+  kimiMcpConfigFile?: string;
 
   // Workflow features
   taskTemplate: string | null;      // Pre-defined task prompt for this workspace
@@ -48,6 +55,9 @@ export const AVAILABLE_MODELS: { id: ModelId; name: string; description: string;
   { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fastest, lightweight', cli: ['claude'] },
   { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard chat mode (default)', cli: ['deepseek'] },
   { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Thinking mode (auto-enabled)', cli: ['deepseek'] },
+  { id: 'moonshot-v1-8k', name: 'Moonshot v1 8K', description: '8K context (default)', cli: ['kimi'] },
+  { id: 'moonshot-v1-32k', name: 'Moonshot v1 32K', description: '32K context', cli: ['kimi'] },
+  { id: 'moonshot-v1-128k', name: 'Moonshot v1 128K', description: '128K context', cli: ['kimi'] },
 ];
 
 /**
@@ -67,6 +77,8 @@ export function getDefaultModelForCli(cli: CliType): ModelId {
   switch (cli) {
     case 'deepseek':
       return 'deepseek-chat';
+    case 'kimi':
+      return 'moonshot-v1-8k';
     case 'claude':
     default:
       return 'claude-sonnet-4-20250514';
