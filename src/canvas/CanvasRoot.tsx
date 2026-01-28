@@ -74,6 +74,7 @@ export function CanvasRoot() {
   const [currentPhase, setCurrentPhase] = useState(0);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true); // Enable snap-to-grid by default
+  const [showDebugControlPoints, setShowDebugControlPoints] = useState(false); // Debug mode for connection control points
 
   // Snap position to grid
   const snapPositionToGrid = useCallback((x: number, y: number): { x: number; y: number } => {
@@ -247,6 +248,11 @@ export function CanvasRoot() {
       if (e.key.toLowerCase() === 'g' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         setSnapToGrid(prev => !prev);
+      }
+      // D = Toggle debug control points
+      if (e.key.toLowerCase() === 'd' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setShowDebugControlPoints(prev => !prev);
       }
     };
 
@@ -470,7 +476,8 @@ export function CanvasRoot() {
       workspaces,
       wiring,
       viewportRef.current,
-      containerRef.current?.getBoundingClientRect() || null
+      containerRef.current?.getBoundingClientRect() || null,
+      { showDebugControlPoints }
     );
 
     // Render nodes (workspaces)

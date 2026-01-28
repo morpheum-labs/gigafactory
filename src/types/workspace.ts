@@ -10,8 +10,8 @@ export type ModelId =
   | 'moonshot-v1-32k'
   | 'moonshot-v1-128k';
 
-/** CLI backend: `claude`, `cursor` (Cursor Agent), `kilo` (Kilo Code), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), or `kimi` (Kimi CLI). */
-export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi';
+/** CLI backend: `claude`, `cursor` (Cursor Agent), `kilo` (Kilo Code), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), `kimi` (Kimi CLI), or `qwen` (Qwen Code CLI). */
+export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi' | 'qwen';
 
 export interface WorkspaceConnection {
   fromId: string;      // Source workspace ID
@@ -32,7 +32,7 @@ export interface Workspace {
   createdAt: number;
   systemPrompt: string | null;
   model: ModelId;
-  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`. */
+  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, `kimi`, or `qwen`. */
   cli?: CliType;
   /** Cursor-only: `agent`, `plan`, or `ask`. Ignored for Claude and Kilo. */
   mode?: string;
@@ -79,6 +79,11 @@ export function getDefaultModelForCli(cli: CliType): ModelId {
       return 'deepseek-chat';
     case 'kimi':
       return 'moonshot-v1-8k';
+    case 'qwen':
+      // Qwen Code is OpenAI-compatible and can use various models
+      // Default model is typically configured via environment or CLI
+      // Return a generic model ID that can be overridden
+      return 'claude-sonnet-4-20250514'; // Fallback to Claude model ID format
     case 'claude':
     default:
       return 'claude-sonnet-4-20250514';

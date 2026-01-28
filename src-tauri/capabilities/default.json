@@ -19,6 +19,36 @@
           "name": "agent",
           "cmd": "agent",
           "args": true
+        },
+        {
+          "name": "kilo",
+          "cmd": "kilo",
+          "args": true
+        },
+        {
+          "name": "gemini",
+          "cmd": "gemini",
+          "args": true
+        },
+        {
+          "name": "grok",
+          "cmd": "grok",
+          "args": true
+        },
+        {
+          "name": "deepseek-cli",
+          "cmd": "deepseek-cli",
+          "args": true
+        },
+        {
+          "name": "kimi",
+          "cmd": "kimi",
+          "args": true
+        },
+        {
+          "name": "qwen",
+          "cmd": "qwen",
+          "args": true
         }
       ]
     }

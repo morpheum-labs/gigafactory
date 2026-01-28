@@ -50,7 +50,7 @@ function App() {
   // Set up event listeners
   useAgentEvents();
 
-  // Check if Claude, Cursor, Kilo, Gemini, Grok, DeepSeek, and Kimi CLIs are available on mount
+  // Check if Claude, Cursor, Kilo, Gemini, Grok, DeepSeek, Kimi, and Qwen CLIs are available on mount
   useEffect(() => {
     const check = async () => {
       setStatusMessage('Checking CLIs...');
@@ -62,6 +62,7 @@ function App() {
       const grok = clis.grok ?? false;
       const deepseek = clis.deepseek ?? false;
       const kimi = clis.kimi ?? false;
+      const qwen = clis.qwen ?? false;
       
       // Store CLI availability in settings store for global access
       setCliAvailability(clis);
@@ -75,11 +76,11 @@ function App() {
       setKimiCliAvailable(kimi);
       
       // Set cliAvailable to true if ANY CLI is available (for StatusBar)
-      const anyCliAvailable = claude || cursor || kilo || gemini || grok || deepseek || kimi;
+      const anyCliAvailable = claude || cursor || kilo || gemini || grok || deepseek || kimi || qwen;
       setCliAvailable(anyCliAvailable);
       
-      const which = [claude && 'Claude', cursor && 'Cursor', kilo && 'Kilo', gemini && 'Gemini', grok && 'Grok', deepseek && 'DeepSeek', kimi && 'Kimi'].filter(Boolean).join(', ') || 'none';
-      setStatusMessage(which !== 'none' ? 'Ready' : 'No CLI found (Claude, Cursor, Kilo, Gemini, Grok, DeepSeek, or Kimi)');
+      const which = [claude && 'Claude', cursor && 'Cursor', kilo && 'Kilo', gemini && 'Gemini', grok && 'Grok', deepseek && 'DeepSeek', kimi && 'Kimi', qwen && 'Qwen'].filter(Boolean).join(', ') || 'none';
+      setStatusMessage(which !== 'none' ? 'Ready' : 'No CLI found (Claude, Cursor, Kilo, Gemini, Grok, DeepSeek, Kimi, or Qwen)');
     };
     check();
   }, [

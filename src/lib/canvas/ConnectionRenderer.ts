@@ -8,7 +8,7 @@ import type { Workspace } from '../../types/workspace';
 import type { ViewportController } from './ViewportController';
 import type { WiringState } from '../../stores/ui';
 import { calculateVisibleBounds, isPointVisible } from './CanvasUtils';
-import { routeBezierCurve, bezierToCubicSegments, type Point } from './BezierRouter';
+import { routeBezierCurve, bezierToCubicSegments, type Point, type BezierRoute, SegmentType } from './BezierRouter';
 
 export interface ConnectionRendererOptions {
   lineColor?: number;
@@ -18,6 +18,11 @@ export interface ConnectionRendererOptions {
   activeGlowAlpha?: number;
   arrowSize?: number;
   dotRadius?: number;
+  showDebugControlPoints?: boolean;
+  debugControlPointColor?: number;
+  debugControlPointRadius?: number;
+  debugLineColor?: number;
+  debugLineAlpha?: number;
 }
 
 const DEFAULT_OPTIONS: Required<ConnectionRendererOptions> = {
@@ -28,7 +33,147 @@ const DEFAULT_OPTIONS: Required<ConnectionRendererOptions> = {
   activeGlowAlpha: 0.2,
   arrowSize: 10,
   dotRadius: 6,
+  showDebugControlPoints: false,
+  debugControlPointColor: 0xff6b6b,
+  debugControlPointRadius: 5,
+  debugLineColor: 0xff6b6b,
+  debugLineAlpha: 0.4,
 };
+
+/**
+ * Render debug control points for a Bezier route
+ * OPTIMIZED: Batches graphics operations to reduce expensive fill/stroke calls
+ */
+function renderDebugControlPoints(
+  graphics: Graphics,
+  route: BezierRoute | null,
+  start: Point,
+  end: Point,
+  options: Required<ConnectionRendererOptions>
+): void {
+  if (!route || !options.showDebugControlPoints) return;
+
+  const {
+    debugControlPointColor,
+    debugControlPointRadius,
+    debugLineColor,
+    debugLineAlpha,
+  } = options;
+
+  // Helper to check if two points are the same (within tolerance)
+  const pointsEqual = (p1: Point, p2: Point, tolerance: number = 0.1): boolean => {
+    return Math.abs(p1.x - p2.x) < tolerance && Math.abs(p1.y - p2.y) < tolerance;
+  };
+
+  // Filter out control points that match start or end to avoid duplicates
+  const filteredControlPoints = route.controlPoints.filter(
+    cp => !pointsEqual(cp, start) && !pointsEqual(cp, end)
+  );
+
+  // Draw lines connecting control points
+  graphics.setStrokeStyle({
+    width: 1,
+    color: debugLineColor,
+    alpha: debugLineAlpha,
+  });
+
+  // Draw lines between consecutive control points (without duplicates)
+  const allPoints = [start, ...filteredControlPoints, end];
+  for (let i = 0; i < allPoints.length - 1; i++) {
+    graphics.moveTo(allPoints[i].x, allPoints[i].y);
+    graphics.lineTo(allPoints[i + 1].x, allPoints[i + 1].y);
+  }
+  graphics.stroke();
+
+  // OPTIMIZED: Batch all circles with same style together
+  // Draw start point (green)
+  graphics.setFillStyle({ color: 0x4ade80, alpha: 0.9 });
+  graphics.setStrokeStyle({
+    width: 2,
+    color: 0x4ade80,
+    alpha: 1,
+  });
+  graphics.circle(start.x, start.y, debugControlPointRadius + 1);
+  graphics.fill();
+  graphics.stroke();
+
+  // Draw control points (batched - all same style)
+  if (filteredControlPoints.length > 0) {
+    graphics.setFillStyle({ color: debugControlPointColor, alpha: 0.8 });
+    graphics.setStrokeStyle({
+      width: 2,
+      color: debugControlPointColor,
+      alpha: 1,
+    });
+    // Draw all circles first, then fill/stroke once
+    for (const cp of filteredControlPoints) {
+      graphics.circle(cp.x, cp.y, debugControlPointRadius);
+    }
+    graphics.fill();
+    graphics.stroke();
+  }
+
+  // Draw end point (blue)
+  graphics.setFillStyle({ color: 0x3b82f6, alpha: 0.9 });
+  graphics.setStrokeStyle({
+    width: 2,
+    color: 0x3b82f6,
+    alpha: 1,
+  });
+  graphics.circle(end.x, end.y, debugControlPointRadius + 1);
+  graphics.fill();
+  graphics.stroke();
+
+  // Draw waypoints if available (batched)
+  if (route.waypoints && route.waypoints.length > 0) {
+    graphics.setFillStyle({ color: 0xfbbf24, alpha: 0.7 });
+    graphics.setStrokeStyle({
+      width: 1,
+      color: 0xf59e0b,
+      alpha: 0.8,
+    });
+    // Draw all waypoint circles first, then fill/stroke once
+    for (const wp of route.waypoints) {
+      graphics.circle(wp.x, wp.y, debugControlPointRadius - 1);
+    }
+    graphics.fill();
+    graphics.stroke();
+  }
+
+  // Draw segment classification (batched by color)
+  if (route.segments && route.segments.length > 0) {
+    // Group segments by color to minimize style changes
+    const segmentsByColor = new Map<number, Array<{ x: number; y: number }>>();
+    
+    for (const seg of route.segments) {
+      const midX = (seg.start.x + seg.end.x) / 2;
+      const midY = (seg.start.y + seg.end.y) / 2;
+      
+      let segColor = 0x94a3b8; // gray (default)
+      if (seg.type === SegmentType.CRITICAL) {
+        segColor = 0xef4444; // red
+      } else if (seg.type === SegmentType.FREE) {
+        segColor = 0x22c55e; // green
+      } else if (seg.type === SegmentType.TRANSITION) {
+        segColor = 0xf59e0b; // amber
+      }
+
+      if (!segmentsByColor.has(segColor)) {
+        segmentsByColor.set(segColor, []);
+      }
+      segmentsByColor.get(segColor)!.push({ x: midX, y: midY });
+    }
+
+    // Draw all segments of the same color together
+    for (const [color, points] of segmentsByColor) {
+      graphics.setFillStyle({ color, alpha: 0.3 });
+      for (const point of points) {
+        graphics.circle(point.x, point.y, debugControlPointRadius + 2);
+      }
+      graphics.fill();
+    }
+  }
+}
 
 /**
  * Render connections between workspaces
@@ -151,6 +296,9 @@ export function renderConnections(
             );
           }
           graphics.stroke();
+
+          // Draw debug control points if enabled
+          renderDebugControlPoints(graphics, route, start, destination, opts);
         } else {
           // Fallback to simple routing if optimization fails
           const maxHeight = Math.max(fromWs.height, toWs.height);
@@ -239,6 +387,22 @@ export function renderConnections(
           lineEndY
         );
         graphics.stroke();
+
+        // Draw debug control points if enabled (for simple forward routing)
+        if (opts.showDebugControlPoints) {
+          const start: Point = { x: fromX, y: fromY };
+          const end: Point = { x: lineEndX, y: lineEndY };
+          const simpleRoute: BezierRoute = {
+            controlPoints: [
+              { x: control1X, y: control1Y },
+              { x: control2X, y: control2Y },
+            ],
+            order: 3,
+            cost: 0,
+            clearance: Infinity,
+          };
+          renderDebugControlPoints(graphics, simpleRoute, start, end, opts);
+        }
       }
 
       // Draw arrow (tip at toX, base at toX - arrowSize)
@@ -327,6 +491,9 @@ export function renderConnections(
             );
           }
           graphics.stroke();
+
+          // Draw debug control points if enabled
+          renderDebugControlPoints(graphics, route, start, destination, opts);
         } else {
           // Fallback to simple routing
           const verticalOffset = fromWs.height * 0.8;
@@ -358,6 +525,22 @@ export function renderConnections(
           graphics.moveTo(fromX, fromY);
           graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
           graphics.stroke();
+
+          // Draw debug control points if enabled (for fallback routing)
+          if (opts.showDebugControlPoints) {
+            const start: Point = { x: fromX, y: fromY };
+            const end: Point = { x: worldMouse.x, y: worldMouse.y };
+            const simpleRoute: BezierRoute = {
+              controlPoints: [
+                { x: control1X, y: control1Y },
+                { x: control2X, y: control2Y },
+              ],
+              order: 3,
+              cost: 0,
+              clearance: Infinity,
+            };
+            renderDebugControlPoints(graphics, simpleRoute, start, end, opts);
+          }
         }
       } else {
         // Normal forward routing
@@ -386,6 +569,22 @@ export function renderConnections(
         graphics.moveTo(fromX, fromY);
         graphics.bezierCurveTo(control1X, control1Y, control2X, control2Y, worldMouse.x, worldMouse.y);
         graphics.stroke();
+
+        // Draw debug control points if enabled (for forward routing)
+        if (opts.showDebugControlPoints) {
+          const start: Point = { x: fromX, y: fromY };
+          const end: Point = { x: worldMouse.x, y: worldMouse.y };
+          const simpleRoute: BezierRoute = {
+            controlPoints: [
+              { x: control1X, y: control1Y },
+              { x: control2X, y: control2Y },
+            ],
+            order: 3,
+            cost: 0,
+            clearance: Infinity,
+          };
+          renderDebugControlPoints(graphics, simpleRoute, start, end, opts);
+        }
       }
       
       // Draw arrow at end

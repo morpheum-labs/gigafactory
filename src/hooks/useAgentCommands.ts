@@ -47,7 +47,7 @@ export function useAgentCommands() {
     async (
       workspaceId: string,
       prompt: string,
-      options?: { allowedTools?: string[]; useWorkflowInputs?: boolean; cli?: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi'; mode?: string }
+      options?: { allowedTools?: string[]; useWorkflowInputs?: boolean; cli?: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi' | 'qwen'; mode?: string }
     ) => {
       try {
         // Check if there's an existing agent for this workspace

@@ -89,6 +89,8 @@ pub async fn check_cli_available(
         "gemini" => "gemini",
         "grok" => "grok",
         "deepseek" => "deepseek-cli",
+        "kimi" => "kimi",
+        "qwen" => "qwen",
         _ => return Json(false),
     };
     
@@ -104,6 +106,8 @@ pub async fn check_all_clis_available() -> Json<HashMap<String, bool>> {
         ("gemini", "gemini"),
         ("grok", "grok"),
         ("deepseek", "deepseek-cli"),
+        ("kimi", "kimi"),
+        ("qwen", "qwen"),
     ];
 
     // Check all CLIs in parallel

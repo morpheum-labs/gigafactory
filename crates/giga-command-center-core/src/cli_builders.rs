@@ -215,3 +215,29 @@ pub fn build_kimi_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
         ("kimi", args)
     }
 }
+
+pub fn build_qwen_args(config: &AgentConfig) -> (&'static str, Vec<String>) {
+    // Qwen Code CLI: https://github.com/QwenLM/qwen-code
+    // Binary: `qwen`
+    // Install: npm install -g @qwen-code/qwen-code@latest or brew install qwen-code
+    // Headless mode: qwen -p "your question"
+    // Similar to other CLIs: -p, --model, --output-format, --system-prompt
+    // Authentication: qwen /auth (handled separately, uses OAuth or OPENAI_API_KEY)
+    let mut args = vec![
+        "-p".to_string(),
+        config.prompt.clone(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ];
+    if let Some(model) = &config.model {
+        args.push("--model".to_string());
+        args.push(model.clone());
+    }
+    if let Some(sp) = &config.system_prompt {
+        if !sp.is_empty() {
+            args.push("--system-prompt".to_string());
+            args.push(sp.clone());
+        }
+    }
+    ("qwen", args)
+}

@@ -21,6 +21,7 @@ const CLI_LABELS: Record<CliType, string> = {
   grok: 'Grok CLI (grok)',
   deepseek: 'DeepSeek CLI (deepseek)',
   kimi: 'Kimi CLI (kimi)',
+  qwen: 'Qwen Code (qwen)',
 };
 
 const WORKFLOW_SECTION_STYLE = "mb-5 p-4 bg-gray-800/50 rounded-lg border border-gray-700";

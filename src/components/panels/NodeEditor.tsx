@@ -18,6 +18,7 @@ const CLI_LABELS: Record<CliType, string> = {
   grok: 'Grok CLI (grok)',
   deepseek: 'DeepSeek CLI (deepseek)',
   kimi: 'Kimi CLI (kimi)',
+  qwen: 'Qwen Code (qwen)',
 };
 
 interface NodeEditorProps {

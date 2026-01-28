@@ -3,13 +3,14 @@ use serde::{Deserialize, Serialize};
 pub type AgentId = String;
 pub type WorkspaceId = String;
 
-/// CLI backend: Claude (`claude`), Cursor Agent (`agent`), Kilo (`kilo`), Gemini (`gemini`), Grok (`grok`), DeepSeek (`deepseek`), or Kimi (`kimi`).
+/// CLI backend: Claude (`claude`), Cursor Agent (`agent`), Kilo (`kilo`), Gemini (`gemini`), Grok (`grok`), DeepSeek (`deepseek`), Kimi (`kimi`), or Qwen (`qwen`).
 /// See: https://cursor.com/docs/cli/overview
 /// See: https://github.com/Kilo-Org/kilocode
 /// See: https://github.com/google-gemini/gemini-cli
 /// See: https://github.com/superagent-ai/grok-cli
 /// See: https://github.com/morpheum-labs/deepseek-cli (Go build from gosrc/)
 /// See: https://github.com/moonshot-ai/kimi-cli
+/// See: https://github.com/QwenLM/qwen-code
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CliType {
@@ -21,6 +22,7 @@ pub enum CliType {
     Grok,
     DeepSeek,
     Kimi,
+    Qwen,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,7 +30,7 @@ pub enum CliType {
 pub struct AgentConfig {
     pub workspace_id: WorkspaceId,
     pub prompt: String,
-    /// Which CLI to use: `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`.
+    /// Which CLI to use: `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, `kimi`, or `qwen`.
     #[serde(default)]
     pub cli: Option<CliType>,
     /// Kimi-only: Running mode - `acp` (ACP server mode) or direct execution. Defaults to direct execution.

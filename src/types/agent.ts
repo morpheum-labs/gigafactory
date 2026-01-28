@@ -31,15 +31,15 @@ export interface LogEntry {
   toolInput?: Record<string, unknown>;
 }
 
-/** CLI backend: `claude` (default), `cursor` (Cursor Agent CLI), `kilo` (Kilo Code CLI), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), or `kimi` (Kimi CLI). */
-export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi';
+/** CLI backend: `claude` (default), `cursor` (Cursor Agent CLI), `kilo` (Kilo Code CLI), `gemini` (Gemini CLI), `grok` (Grok CLI), `deepseek` (DeepSeek CLI), `kimi` (Kimi CLI), or `qwen` (Qwen Code CLI). */
+export type CliType = 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi' | 'qwen';
 
 export type AgentId = string;
 
 export interface AgentConfig {
   workspaceId: string;
   prompt: string;
-  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, or `kimi`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/morpheum-labs/deepseek-cli, https://github.com/moonshot-ai/kimi-cli */
+  /** `claude` (default), `cursor`, `kilo`, `gemini`, `grok`, `deepseek`, `kimi`, or `qwen`. See https://cursor.com/docs/cli/overview, https://github.com/Kilo-Org/kilocode, https://github.com/google-gemini/gemini-cli, https://github.com/superagent-ai/grok-cli, https://github.com/morpheum-labs/deepseek-cli, https://github.com/moonshot-ai/kimi-cli, https://github.com/QwenLM/qwen-code */
   cli?: CliType;
   /** Cursor-only: `agent`, `plan`, or `ask`. Ignored for Claude and Kilo. */
   mode?: string;

@@ -35,6 +35,16 @@
       "name": "deepseek-cli",
       "cmd": "deepseek-cli",
       "args": true
+    },
+    {
+      "name": "kimi",
+      "cmd": "kimi",
+      "args": true
+    },
+    {
+      "name": "qwen",
+      "cmd": "qwen",
+      "args": true
     }
   ]
 }

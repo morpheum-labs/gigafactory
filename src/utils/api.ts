@@ -255,7 +255,7 @@ export const api = {
   /**
    * Check if a CLI is available
    */
-  async checkCliAvailable(cli: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi'): Promise<boolean> {
+  async checkCliAvailable(cli: 'claude' | 'cursor' | 'kilo' | 'gemini' | 'grok' | 'deepseek' | 'kimi' | 'qwen'): Promise<boolean> {
     if (isTauri) {
       if (!tauriInvoke) {
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -268,6 +268,7 @@ export const api = {
         grok: 'check_grok_cli_available',
         deepseek: 'check_deepseek_cli_available',
         kimi: 'check_kimi_cli_available',
+        qwen: 'check_qwen_cli_available',
       };
       return await tauriInvoke<boolean>(commandMap[cli]);
     } else {

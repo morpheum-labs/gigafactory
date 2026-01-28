@@ -46,6 +46,7 @@ impl AgentManager {
             CliType::Grok => build_grok_args(&config),
             CliType::DeepSeek => build_deepseek_args(&config),
             CliType::Kimi => build_kimi_args(&config),
+            CliType::Qwen => build_qwen_args(&config),
         };
         
         // Track CLI type for output parsing (deepseek outputs plain text, not JSON)
