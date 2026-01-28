@@ -1,7 +1,8 @@
 /**
  * Hybrid Step-Bump Bézier Router
- * Implements optimized backward routing with hybrid step-bump algorithm
- * Phase 1: Grid-based A* search for waypoints
+ * Implements optimized backward routing with elbow connections
+ * Uses simple step-based routing (like d3 curveStep) for backward connections
+ * Phase 1: Generate elbow waypoints (horizontal-first, then vertical)
  * Phase 2: Segment classification (CRITICAL, FREE, TRANSITION)
  * Phase 3: Hybrid curve generation (step, bump, blend)
  */
@@ -27,7 +28,7 @@ export interface BezierRoute {
   order: number;
   cost: number;
   clearance: number;
-  waypoints?: Point[]; // A* waypoints for hybrid routing
+  waypoints?: Point[]; // Elbow waypoints for hybrid routing
   segments?: HybridSegment[]; // Classified segments
 }
 
@@ -46,13 +47,23 @@ export enum SegmentType {
 
 // Configuration constants
 const MIN_CLEARANCE = 40; // Minimum distance from workspaces (increased for better buffer)
-const GRID_SIZE = 40; // Grid size for A* search
 const CLEARANCE_THRESHOLD = 60; // Threshold for segment classification (lowered for more conservative FREE classification)
 const STEP_T = 0.5; // Step transition point (0-1)
-const MAX_ASTAR_ITERATIONS = 1000; // Max iterations for A* search
-const HORIZONTAL_BUFFER = 60; // Minimum horizontal distance before bending
+const HORIZONTAL_BUFFER = 60; // Minimum horizontal distance before bending (legacy, for non-backward paths)
 const VERTICAL_BUFFER = 40; // Minimum vertical clearance from workspaces
 const BEZIER_SAMPLE_COUNT = 50; // Number of samples for curve intersection checking
+
+// New constants for backward connection routing
+const HORIZONTAL_EXTEND_BASE = 40; // Base horizontal extension (px)
+const HORIZONTAL_EXTEND_PER_CONNECTION = 20; // Additional extension per output connection (px)
+const HORIZONTAL_EXTEND_MAX = 180; // Maximum horizontal extension (px)
+const VERTICAL_OVERREACH_BASE = 20; // Base vertical overreach beyond bounds (px)
+const DENSITY_SPACING_MULTIPLIER = 10; // Spacing per intersecting connection line (px)
+const Y_OVERLAP_THRESHOLD = 1.5; // Multiplier for "close" Y position detection
+
+// Smooth elbow curve constants
+const ELBOW_SMOOTHNESS = 0.3; // Smoothness factor for elbow curves (0-1, higher = smoother)
+const ELBOW_CURVE_RADIUS = 30; // Base radius for elbow curves (px)
 
 /**
  * Convert workspace to bounds for collision detection
@@ -66,6 +77,202 @@ function workspaceToBounds(ws: Workspace): WorkspaceBounds {
     right: ws.x + ws.width,
     bottom: ws.y + ws.height,
   };
+}
+
+/**
+ * Calculate horizontal extension length based on output connection count
+ * Base: 40px, add 20px per output connection, max 180px
+ */
+function calculateHorizontalExtension(
+  sourceWorkspace: Workspace | undefined,
+  _allWorkspaces: Record<string, Workspace> | undefined // Reserved for future use
+): number {
+  if (!sourceWorkspace) return HORIZONTAL_EXTEND_BASE;
+  
+  const numOutputs = sourceWorkspace.outputConnections?.length ?? 0;
+  const extension = HORIZONTAL_EXTEND_BASE + HORIZONTAL_EXTEND_PER_CONNECTION * numOutputs;
+  return Math.min(extension, HORIZONTAL_EXTEND_MAX);
+}
+
+/**
+ * Calculate horizontal extension length for input side (symmetric to output)
+ * Base: 40px, add 20px per incoming connection, max 180px
+ * Counts how many workspaces connect TO this target workspace
+ */
+function calculateInputExtension(
+  targetWorkspace: Workspace | undefined,
+  allWorkspaces: Record<string, Workspace> | undefined
+): number {
+  if (!targetWorkspace || !allWorkspaces) return HORIZONTAL_EXTEND_BASE;
+  
+  // Count incoming connections (workspaces that have this target in their outputConnections)
+  let numInputs = 0;
+  for (const ws of Object.values(allWorkspaces)) {
+    if (ws.outputConnections?.includes(targetWorkspace.id)) {
+      numInputs++;
+    }
+  }
+  
+  const extension = HORIZONTAL_EXTEND_BASE + HORIZONTAL_EXTEND_PER_CONNECTION * numInputs;
+  return Math.min(extension, HORIZONTAL_EXTEND_MAX);
+}
+
+/**
+ * Choose vertical direction (top or bottom) based on Y position overlap
+ * If workspaces overlap or are close: use upper bound (top)
+ * Otherwise: use lower bound (bottom)
+ */
+function chooseVerticalDirection(
+  sourceBounds: WorkspaceBounds,
+  targetBounds: WorkspaceBounds
+): 'top' | 'bottom' {
+  const sourceTop = sourceBounds.y;
+  const sourceBottom = sourceBounds.bottom;
+  const targetTop = targetBounds.y;
+  const targetBottom = targetBounds.bottom;
+  
+  // Check if Y ranges overlap
+  const isOverlapping = !(
+    sourceBottom < targetTop || 
+    targetBottom < sourceTop
+  );
+  
+  // Check if they're close (within 1.5x max height)
+  const maxHeight = Math.max(sourceBounds.height, targetBounds.height);
+  const sourceCenterY = (sourceTop + sourceBottom) / 2;
+  const targetCenterY = (targetTop + targetBottom) / 2;
+  const yDistance = Math.abs(sourceCenterY - targetCenterY);
+  const isClose = yDistance < maxHeight * Y_OVERLAP_THRESHOLD;
+  
+  // If overlapping or close: use upper bound, otherwise lower bound
+  return (isOverlapping || isClose) ? 'top' : 'bottom';
+}
+
+/**
+ * Check if two line segments intersect
+ * Uses cross product method for line segment intersection
+ */
+function segmentsIntersect(
+  p1: Point, p2: Point, p3: Point, p4: Point
+): boolean {
+  // Helper function to calculate cross product
+  const crossProduct = (o: Point, a: Point, b: Point): number => {
+    return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  };
+  
+  // Check if point d is on segment ab
+  const onSegment = (a: Point, b: Point, c: Point): boolean => {
+    return (
+      c.x <= Math.max(a.x, b.x) &&
+      c.x >= Math.min(a.x, b.x) &&
+      c.y <= Math.max(a.y, b.y) &&
+      c.y >= Math.min(a.y, b.y)
+    );
+  };
+  
+  // Calculate orientations
+  const o1 = crossProduct(p1, p2, p3);
+  const o2 = crossProduct(p1, p2, p4);
+  const o3 = crossProduct(p3, p4, p1);
+  const o4 = crossProduct(p3, p4, p2);
+  
+  // General case: segments intersect if orientations differ
+  if (o1 * o2 < 0 && o3 * o4 < 0) {
+    return true;
+  }
+  
+  // Special cases: check if endpoints are collinear and on segment
+  if (o1 === 0 && onSegment(p1, p2, p3)) return true;
+  if (o2 === 0 && onSegment(p1, p2, p4)) return true;
+  if (o3 === 0 && onSegment(p3, p4, p1)) return true;
+  if (o4 === 0 && onSegment(p3, p4, p2)) return true;
+  
+  return false;
+}
+
+/**
+ * Calculate connection density along a path segment
+ * Counts how many other connection lines intersect with the given segment
+ */
+function calculateConnectionDensity(
+  pathSegment: { start: Point; end: Point },
+  allWorkspaces: Record<string, Workspace> | undefined,
+  excludeSourceId?: string,
+  excludeTargetId?: string
+): number {
+  if (!allWorkspaces) return 0;
+  
+  let intersectingCount = 0;
+  
+  // Iterate through all connections
+  for (const ws of Object.values(allWorkspaces)) {
+    if (ws.id === excludeSourceId || ws.id === excludeTargetId) continue;
+    
+    ws.outputConnections?.forEach(toId => {
+      const toWs = allWorkspaces[toId];
+      if (!toWs) return;
+      
+      // Calculate connection line endpoints
+      const connStart: Point = { 
+        x: ws.x + ws.width, 
+        y: ws.y + ws.height / 2 
+      };
+      const connEnd: Point = { 
+        x: toWs.x, 
+        y: toWs.y + toWs.height / 2 
+      };
+      
+      // Check if lines intersect
+      if (segmentsIntersect(
+        pathSegment.start, 
+        pathSegment.end, 
+        connStart, 
+        connEnd
+      )) {
+        intersectingCount++;
+      }
+    });
+  }
+  
+  return intersectingCount;
+}
+
+/**
+ * Find workspace IDs from connection points
+ * Matches source point to workspace output port, target to input port
+ */
+function findWorkspaceIdsFromPoints(
+  source: Point,
+  destination: Point,
+  allWorkspaces: Record<string, Workspace>
+): { sourceId?: string; targetId?: string } {
+  let sourceId: string | undefined;
+  let targetId: string | undefined;
+  const tolerance = 5; // Tolerance for matching points to ports
+  
+  for (const ws of Object.values(allWorkspaces)) {
+    // Check if source matches output port (right edge, center Y)
+    const outputX = ws.x + ws.width;
+    const outputY = ws.y + ws.height / 2;
+    if (
+      Math.abs(source.x - outputX) < tolerance &&
+      Math.abs(source.y - outputY) < tolerance
+    ) {
+      sourceId = ws.id;
+    }
+    
+    // Check if destination matches input port (left edge, center Y)
+    const inputX = ws.x;
+    const inputY = ws.y + ws.height / 2;
+    if (
+      Math.abs(destination.x - inputX) < tolerance &&
+      Math.abs(destination.y - inputY) < tolerance
+    ) {
+      targetId = ws.id;
+    }
+  }
+  
+  return { sourceId, targetId };
 }
 
 /**
@@ -314,232 +521,208 @@ function bezierCurveCollides(
 }
 
 /**
- * A* Search Node for grid-based routing
+ * Phase 1: Generate elbow waypoints for backward routing
+ * Uses step-based routing (like d3 curveStep) with rightward extension and bound overreach
+ * For backward connections: start -> horizontal RIGHT -> vertical (up/down over bounds) -> horizontal to destination -> vertical to target
+ * 
+ * Requirements:
+ * - Always extend horizontally to the RIGHT first (40-180px dynamic based on output count)
+ * - Choose vertical direction based on Y overlap (top if overlapping/close, bottom otherwise)
+ * - Overreach target bounds with spacing based on connection density
  */
-interface StepNode {
-  x: number;
-  y: number;
-  direction?: 'H' | 'V'; // Horizontal or Vertical
-  g: number; // Cost from destination
-  h: number; // Heuristic to source
-  f: number; // Total cost
-  parent: StepNode | null;
-}
-
-/**
- * Phase 1: Grid-based A* search for backward routing
- * Starts from destination, routes backward to source
- * ENHANCED: Enforces horizontal-first principle for backward connections
- */
-function backwardAStarSearch(
-  destination: Point,
+function generateElbowWaypoints(
   source: Point,
-  workspaces: WorkspaceBounds[]
-): Point[] | null {
-  const openSet: StepNode[] = [];
-  const closedSet = new Set<string>();
+  destination: Point,
+  _workspaces: WorkspaceBounds[], // Not used here, but kept for API consistency
+  sourceWorkspaceId?: string,
+  targetWorkspaceId?: string,
+  allWorkspaces?: Record<string, Workspace>
+): Point[] {
+  // workspaces parameter is used later in simplifyWaypoints and classifySegments (called from hybridStepBumpRoute)
+  void _workspaces;
   
-  // For backward connections, we want to ensure we go horizontally from source
-  const isBackward = destination.x < source.x;
+  const waypoints: Point[] = [source];
   
-  // Initialize with destination node
-  const startNode: StepNode = {
-    x: Math.round(destination.x / GRID_SIZE) * GRID_SIZE,
-    y: Math.round(destination.y / GRID_SIZE) * GRID_SIZE,
-    g: 0,
-    h: manhattanDistance(destination, source),
-    f: manhattanDistance(destination, source),
-    parent: null,
+  // Get source and target workspaces for bounds and connection counting
+  const sourceWorkspace = sourceWorkspaceId && allWorkspaces 
+    ? allWorkspaces[sourceWorkspaceId] 
+    : undefined;
+  const targetWorkspace = targetWorkspaceId && allWorkspaces 
+    ? allWorkspaces[targetWorkspaceId] 
+    : undefined;
+  
+  // Step 1: Always extend horizontally to the RIGHT first
+  // Calculate dynamic extension based on output connection count
+  const horizontalExtend = calculateHorizontalExtension(sourceWorkspace, allWorkspaces);
+  const rightExtendPoint: Point = {
+    x: source.x + horizontalExtend,
+    y: source.y
+  };
+  waypoints.push(rightExtendPoint);
+  
+  // Step 2: Choose vertical direction and calculate overreach
+  // Get workspace bounds for direction choice
+  let sourceBounds: WorkspaceBounds | undefined;
+  let targetBounds: WorkspaceBounds | undefined;
+  
+  if (sourceWorkspace) {
+    sourceBounds = workspaceToBounds(sourceWorkspace);
+  } else {
+    // Fallback: estimate bounds from point (assume standard workspace size)
+    sourceBounds = {
+      x: source.x - 100, // Estimate
+      y: source.y - 50,
+      width: 200,
+      height: 100,
+      right: source.x + 100,
+      bottom: source.y + 50
+    };
+  }
+  
+  if (targetWorkspace) {
+    targetBounds = workspaceToBounds(targetWorkspace);
+  } else {
+    // Fallback: estimate bounds from point
+    targetBounds = {
+      x: destination.x - 100,
+      y: destination.y - 50,
+      width: 200,
+      height: 100,
+      right: destination.x + 100,
+      bottom: destination.y + 50
+    };
+  }
+  
+  // Choose vertical direction based on Y overlap
+  const verticalDirection = chooseVerticalDirection(sourceBounds, targetBounds);
+  
+  // Calculate input extension early (needed for density calculation)
+  const inputExtension = calculateInputExtension(targetWorkspace, allWorkspaces);
+  
+  // Calculate connection density along ALL path segments
+  // Estimate segments for density calculation:
+  // 1. Vertical segment (from rightExtendPoint to overreach)
+  const estimatedVerticalEnd: Point = {
+    x: rightExtendPoint.x,
+    y: verticalDirection === 'top' 
+      ? Math.min(sourceBounds.y, targetBounds.y) - VERTICAL_BUFFER
+      : Math.max(sourceBounds.bottom, targetBounds.bottom) + VERTICAL_BUFFER
   };
   
-  openSet.push(startNode);
+  // 2. Horizontal left segment (from vertical overreach to target X - input extension)
+  const estimatedHorizontalLeftEnd: Point = {
+    x: destination.x - inputExtension,
+    y: estimatedVerticalEnd.y
+  };
   
-  let iterations = 0;
-  while (openSet.length > 0 && iterations < MAX_ASTAR_ITERATIONS) {
-    iterations++;
-    
-    // Find node with lowest f-cost
-    let minIndex = 0;
-    for (let i = 1; i < openSet.length; i++) {
-      if (openSet[i].f < openSet[minIndex].f) {
-        minIndex = i;
-      }
-    }
-    
-    const current = openSet.splice(minIndex, 1)[0];
-    const key = `${current.x},${current.y}`;
-    
-    if (closedSet.has(key)) continue;
-    closedSet.add(key);
-    
-    // Check if reached source (within grid tolerance)
-    if (Math.abs(current.x - source.x) < GRID_SIZE && Math.abs(current.y - source.y) < GRID_SIZE) {
-      // For backward connections, ensure we go horizontally from source
-      let path: Point[] = [];
-      let node: StepNode | null = current;
-      
-      while (node) {
-        path.unshift({ x: node.x, y: node.y });
-        node = node.parent;
-      }
-      
-      // Add source point exactly
-      path.push(source);
-      
-      // If this is a backward connection, ensure horizontal segment from source
-      if (isBackward && path.length >= 2) {
-        const firstSeg = path[1];
-        // If not going horizontally from source, insert a horizontal point
-        if (Math.abs(firstSeg.y - source.y) > GRID_SIZE/2) {
-          const horizontalPoint: Point = { 
-            x: source.x - HORIZONTAL_BUFFER, 
-            y: source.y 
-          };
-          
-          // Check if horizontal path is clear
-          if (!segmentCollidesWithWorkspace(source, horizontalPoint, workspaces, MIN_CLEARANCE)) {
-            path.splice(1, 0, horizontalPoint);
-          }
-        }
-      }
-      
-      return path;
-    }
-    
-    // Generate neighbors (axis-aligned moves only)
-    const neighbors = generateNeighbors(current, workspaces);
-    
-    for (const neighbor of neighbors) {
-      const neighborKey = `${neighbor.x},${neighbor.y}`;
-      if (closedSet.has(neighborKey)) continue;
-      
-      // Calculate costs with improved penalty system
-      const tentativeG = current.g + movementCost(current, neighbor, workspaces);
-      
-      // Check if this neighbor is already in open set
-      const existingIndex = openSet.findIndex(n => n.x === neighbor.x && n.y === neighbor.y);
-      
-      if (existingIndex >= 0) {
-        // Already in open set, update if better path
-        if (tentativeG < openSet[existingIndex].g) {
-          openSet[existingIndex].g = tentativeG;
-          openSet[existingIndex].h = manhattanDistance(neighbor, source);
-          openSet[existingIndex].f = openSet[existingIndex].g + openSet[existingIndex].h;
-          openSet[existingIndex].parent = current;
-        }
-      } else {
-        // New node, add to open set
-        neighbor.g = tentativeG;
-        neighbor.h = manhattanDistance(neighbor, source);
-        neighbor.f = neighbor.g + neighbor.h;
-        neighbor.parent = current;
-        openSet.push(neighbor);
-      }
-    }
+  // 3. Final vertical segment (to target Y)
+  const estimatedFinalVerticalEnd: Point = {
+    x: destination.x - inputExtension,
+    y: destination.y
+  };
+  
+  // Calculate density for each segment and take the maximum
+  const density1 = calculateConnectionDensity(
+    { start: rightExtendPoint, end: estimatedVerticalEnd },
+    allWorkspaces,
+    sourceWorkspaceId,
+    targetWorkspaceId
+  );
+  
+  const density2 = calculateConnectionDensity(
+    { start: estimatedVerticalEnd, end: estimatedHorizontalLeftEnd },
+    allWorkspaces,
+    sourceWorkspaceId,
+    targetWorkspaceId
+  );
+  
+  const density3 = calculateConnectionDensity(
+    { start: estimatedHorizontalLeftEnd, end: estimatedFinalVerticalEnd },
+    allWorkspaces,
+    sourceWorkspaceId,
+    targetWorkspaceId
+  );
+  
+  // Use maximum density across all segments
+  const maxDensity = Math.max(density1, density2, density3);
+  
+  // Calculate overreach: base + spacing based on density
+  const extraSpacing = DENSITY_SPACING_MULTIPLIER * maxDensity;
+  const overreach = VERTICAL_OVERREACH_BASE + extraSpacing;
+  
+  // Step 3: Vertical extension with overreach beyond target bounds
+  let verticalY: number;
+  if (verticalDirection === 'top') {
+    // Route over upper Y bound
+    verticalY = Math.min(sourceBounds.y, targetBounds.y) - VERTICAL_BUFFER - overreach;
+  } else {
+    // Route over lower Y bound
+    verticalY = Math.max(sourceBounds.bottom, targetBounds.bottom) + VERTICAL_BUFFER + overreach;
   }
   
-  return null; // No path found
-}
-
-/**
- * Generate axis-aligned neighbor positions with improved collision checking
- */
-function generateNeighbors(node: StepNode, workspaces: WorkspaceBounds[]): StepNode[] {
-  const neighbors: StepNode[] = [];
-  const moves = [
-    { dx: GRID_SIZE, dy: 0, dir: 'H' as const },   // Right
-    { dx: -GRID_SIZE, dy: 0, dir: 'H' as const },  // Left
-    { dx: 0, dy: GRID_SIZE, dir: 'V' as const },  // Down
-    { dx: 0, dy: -GRID_SIZE, dir: 'V' as const }, // Up
-  ];
+  const verticalOverreachPoint: Point = {
+    x: rightExtendPoint.x,
+    y: verticalY
+  };
+  waypoints.push(verticalOverreachPoint);
   
-  for (const move of moves) {
-    const nx = node.x + move.dx;
-    const ny = node.y + move.dy;
+  // Step 4: Horizontal line LEFT to target X position (2nd elbow)
+  // For backward connections (from output), this MUST always go LEFT
+  // This is the second elbow - must always go left for backward connections
+  const isBackward = destination.x < source.x;
+  
+  // For backward connections, ensure we go LEFT from the vertical overreach point
+  // Go to target X MINUS input extension (to create space for the 4th elbow)
+  // inputExtension was already calculated above for density calculation
+  let horizontalToTargetX: number;
+  
+  if (isBackward) {
+    // Backward connection: MUST go LEFT
+    // Go to target X minus input extension (for symmetric clearance)
+    // This creates space for the 4th elbow (horizontal right extension at input)
+    horizontalToTargetX = destination.x - inputExtension;
     
-    // Check if the grid cell is clear
-    const cellClear = isGridCellClear(nx, ny, GRID_SIZE, workspaces);
-    
-    if (cellClear) {
-      neighbors.push({
-        x: nx,
-        y: ny,
-        direction: move.dir,
-        g: 0,
-        h: 0,
-        f: 0,
-        parent: null,
-      });
+    // Ensure we're actually going left (safety check)
+    if (horizontalToTargetX >= rightExtendPoint.x) {
+      // Edge case: not going left (shouldn't happen for backward)
+      // Force going left by at least the horizontal buffer
+      horizontalToTargetX = rightExtendPoint.x - HORIZONTAL_BUFFER;
+      console.warn('Backward connection: destination not to the left, forcing left movement');
     }
+  } else {
+    // Forward connection: go to destination.x (should be to the right)
+    horizontalToTargetX = destination.x;
   }
   
-  return neighbors;
-}
-
-/**
- * Check if a grid cell is clear of workspaces with margin
- */
-function isGridCellClear(x: number, y: number, size: number, workspaces: WorkspaceBounds[]): boolean {
-  // Check all four corners of the grid cell
-  const corners = [
-    { x, y },
-    { x: x + size, y },
-    { x, y: y + size },
-    { x: x + size, y: y + size },
-  ];
+  const horizontalToTarget: Point = {
+    x: horizontalToTargetX,
+    y: verticalY
+  };
+  waypoints.push(horizontalToTarget);
   
-  for (const corner of corners) {
-    if (collidesWithWorkspace(corner, workspaces, MIN_CLEARANCE)) {
-      return false;
-    }
-  }
+  // Step 5: Vertical line to align with target Y (3rd elbow)
+  // This creates a vertical segment to reach the target's Y level
+  const verticalToTargetY: Point = {
+    x: horizontalToTargetX,
+    y: destination.y
+  };
+  waypoints.push(verticalToTargetY);
   
-  return true;
-}
-
-/**
- * Calculate movement cost with penalties for direction changes and proximity
- * ENHANCED: Higher penalties for going near workspaces
- */
-function movementCost(current: StepNode, neighbor: StepNode, workspaces: WorkspaceBounds[]): number {
-  const baseCost = Math.abs(neighbor.x - current.x) + Math.abs(neighbor.y - current.y);
+  // Step 6: Horizontal line RIGHT to target input socket (4th elbow)
+  // This is the final horizontal extension at the input side (symmetric to output)
+  // Creates clearance and matches the output's rightward extension
+  const horizontalToInput: Point = {
+    x: destination.x,
+    y: destination.y
+  };
+  waypoints.push(horizontalToInput);
   
-  // Penalty for direction changes (to reduce zigzag)
-  let directionPenalty = 0;
-  if (current.parent) {
-    const prevDirection = current.direction;
-    const currDirection = neighbor.direction;
-    if (prevDirection && currDirection && prevDirection !== currDirection) {
-      directionPenalty = 10; // Increased penalty
-    }
-  }
-  
-  // Penalty for proximity to workspaces (higher near obstacles)
-  let clearancePenalty = 0;
-  const neighborPoint = { x: neighbor.x, y: neighbor.y };
-  
-  for (const ws of workspaces) {
-    const dist = distanceToRectangle(neighborPoint, ws);
-    if (dist < CLEARANCE_THRESHOLD) {
-      // Exponential penalty as we get closer to obstacles
-      const proximityFactor = Math.pow((CLEARANCE_THRESHOLD - dist) / CLEARANCE_THRESHOLD, 2);
-      clearancePenalty += 50 * proximityFactor; // Increased penalty
-    }
-  }
-  
-  return baseCost + directionPenalty + clearancePenalty;
-}
-
-/**
- * Manhattan distance heuristic for grid-based routing
- */
-function manhattanDistance(p1: Point, p2: Point): number {
-  return Math.abs(p1.x - p2.x) + Math.abs(p1.y - p2.y);
+  return waypoints;
 }
 
 /**
  * Simplify waypoints by removing unnecessary intermediate points
- * ENHANCED: Better collision checking during simplification
+ * Keeps only essential waypoints that maintain collision-free path
  */
 function simplifyWaypoints(waypoints: Point[], workspaces: WorkspaceBounds[]): Point[] {
   if (waypoints.length <= 2) return waypoints;
@@ -735,6 +918,80 @@ function findBestCurveDirection(
 }
 
 /**
+ * Generate smooth elbow segment for backward connections
+ * Creates smooth Bézier curves with consistent control points at elbows
+ * Ensures same smoothness at 2nd, 3rd, and 4th elbow turns
+ */
+function generateSmoothElbowSegment(
+  p1: Point,
+  p2: Point,
+  _prevSegment?: { start: Point; end: Point } | null, // Reserved for future use (smooth transitions between segments)
+  _nextSegment?: { start: Point; end: Point } | null  // Reserved for future use (smooth transitions between segments)
+): PathCommand[] {
+  // Parameters reserved for future enhancement: smooth transitions between consecutive segments
+  void _prevSegment;
+  void _nextSegment;
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  
+  // Calculate smoothness radius based on segment length
+  // Use consistent smoothness factor for all elbows
+  const smoothnessRadius = Math.min(ELBOW_CURVE_RADIUS, distance * ELBOW_SMOOTHNESS);
+  
+  // Determine if this is a horizontal or vertical segment
+  const isHorizontal = Math.abs(dy) < Math.abs(dx);
+  
+  // Calculate control points for smooth transition
+  let cp1: Point;
+  let cp2: Point;
+  
+  if (isHorizontal) {
+    // Horizontal segment: smooth transition at start and end
+    const horizontalSmooth = smoothnessRadius;
+    cp1 = {
+      x: p1.x + (dx > 0 ? horizontalSmooth : -horizontalSmooth),
+      y: p1.y
+    };
+    cp2 = {
+      x: p2.x - (dx > 0 ? horizontalSmooth : -horizontalSmooth),
+      y: p2.y
+    };
+  } else {
+    // Vertical segment: smooth transition at start and end
+    const verticalSmooth = smoothnessRadius;
+    cp1 = {
+      x: p1.x,
+      y: p1.y + (dy > 0 ? verticalSmooth : -verticalSmooth)
+    };
+    cp2 = {
+      x: p2.x,
+      y: p2.y - (dy > 0 ? verticalSmooth : -verticalSmooth)
+    };
+  }
+  
+  // For very short segments, use straight line
+  if (distance < smoothnessRadius * 2) {
+    return [
+      { type: 'L', x1: p2.x, y1: p2.y }
+    ];
+  }
+  
+  // Create smooth Bézier curve
+  return [
+    {
+      type: 'C',
+      x1: cp1.x,
+      y1: cp1.y,
+      x2: cp2.x,
+      y2: cp2.y,
+      x3: p2.x,
+      y3: p2.y
+    }
+  ];
+}
+
+/**
  * Generate bump segment (Bézier curve with horizontal tangents)
  * ENHANCED: Workspace-aware control points with curve validation
  */
@@ -863,14 +1120,29 @@ function generateHybridCurve(
 ): PathCommand[] {
   const commands: PathCommand[] = [];
   
-  for (const seg of segments) {
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
     let segCommands: PathCommand[];
     
-    if (seg.type === SegmentType.CRITICAL) {
-      // Use step routing for guaranteed clearance, with horizontal-first for backward
+    // For backward connections, use smooth elbow curves with consistent smoothness
+    // This creates smooth transitions at 2nd, 3rd, and 4th elbows with same control point behavior
+    if (isBackward) {
+      // Get previous and next segments for context (to ensure smooth transitions)
+      const prevSeg = i > 0 ? segments[i - 1] : null;
+      const nextSeg = i < segments.length - 1 ? segments[i + 1] : null;
+      
+      // Use smooth elbow segments for consistent smoothness at all elbows
+      segCommands = generateSmoothElbowSegment(
+        seg.start,
+        seg.end,
+        prevSeg ? { start: prevSeg.start, end: prevSeg.end } : null,
+        nextSeg ? { start: nextSeg.start, end: nextSeg.end } : null
+      );
+    } else if (seg.type === SegmentType.CRITICAL) {
+      // Forward connections: use step routing for guaranteed clearance
       segCommands = generateStepSegment(seg.start, seg.end, STEP_T, isBackward);
     } else if (seg.type === SegmentType.FREE) {
-      // Use bump for smooth curves (with workspace awareness)
+      // Forward connections: use bump for smooth curves (with workspace awareness)
       segCommands = generateBumpSegment(seg.start, seg.end, workspaces);
     } else {
       // TRANSITION: Blend step and bump (with workspace awareness)
@@ -933,71 +1205,50 @@ function commandsToControlPoints(commands: PathCommand[], start: Point): Point[]
 
 /**
  * Main routing function using Hybrid Step-Bump Algorithm
- * Phase 1: A* search for waypoints
+ * Phase 1: Generate elbow waypoints (step-based routing like d3 curveStep)
  * Phase 2: Classify segments
  * Phase 3: Generate hybrid curves
- * ENHANCED: Better workspace avoidance and horizontal-first principle
+ * ENHANCED: Better workspace avoidance and horizontal-first principle with rightward extension
  */
 function hybridStepBumpRoute(
   destination: Point,
   source: Point,
-  workspaces: WorkspaceBounds[]
+  workspaces: WorkspaceBounds[],
+  sourceWorkspaceId?: string,
+  targetWorkspaceId?: string,
+  allWorkspaces?: Record<string, Workspace>
 ): BezierRoute | null {
   const isBackward = destination.x < source.x;
   
-  // Create expanded workspaces (excluding connection port regions)
-  const expandedWorkspaces = workspaces.map(ws => ({
-    x: ws.x - MIN_CLEARANCE,
-    y: ws.y - MIN_CLEARANCE,
-    width: ws.width + 2 * MIN_CLEARANCE,
-    height: ws.height + 2 * MIN_CLEARANCE,
-    right: ws.right + MIN_CLEARANCE,
-    bottom: ws.bottom + MIN_CLEARANCE,
-  }));
+  // Phase 1: Generate elbow waypoints (step-based routing)
+  // For backward connections, this creates a path: horizontal RIGHT -> vertical (overreach) -> horizontal -> vertical
+  const waypoints = generateElbowWaypoints(
+    source, 
+    destination, 
+    workspaces,
+    sourceWorkspaceId,
+    targetWorkspaceId,
+    allWorkspaces
+  );
   
-  // Phase 1: Find waypoints using A* search (backward routing)
-  const backwardWaypoints = backwardAStarSearch(destination, source, expandedWorkspaces);
-  
-  if (!backwardWaypoints || backwardWaypoints.length < 2) {
+  if (!waypoints || waypoints.length < 2) {
     return null; // No path found
   }
   
   // Simplify waypoints to remove unnecessary intermediate points
-  const simplifiedBackward = simplifyWaypoints(backwardWaypoints, workspaces);
-  
-  // Reverse waypoints to go from source to destination for rendering
-  const waypoints = [...simplifiedBackward].reverse();
-  
-  // For backward connections, ensure we start with a horizontal segment
-  if (isBackward && waypoints.length >= 2) {
-    const sourcePoint = waypoints[0];
-    const nextPoint = waypoints[1];
-    
-    // If not starting horizontally, insert a horizontal segment
-    if (Math.abs(nextPoint.y - sourcePoint.y) > GRID_SIZE/2) {
-      const horizontalPoint: Point = { 
-        x: sourcePoint.x - HORIZONTAL_BUFFER, 
-        y: sourcePoint.y 
-      };
-      
-      // Check if horizontal path is clear
-      if (!segmentCollidesWithWorkspace(sourcePoint, horizontalPoint, workspaces, MIN_CLEARANCE)) {
-        waypoints.splice(1, 0, horizontalPoint);
-      }
-    }
-  }
+  const simplifiedWaypoints = simplifyWaypoints(waypoints, workspaces);
   
   // Phase 2: Classify segments
-  const segments = classifySegments(waypoints, workspaces);
+  const segments = classifySegments(simplifiedWaypoints, workspaces);
   
   // Phase 3: Generate hybrid curve commands (with workspace awareness)
   const commands = generateHybridCurve(segments, isBackward, workspaces);
   
   // Convert commands to control points for rendering
-  const controlPoints = commandsToControlPoints(commands, waypoints[0]);
+  const controlPoints = commandsToControlPoints(commands, simplifiedWaypoints[0]);
   
   // Post-routing validation: Check if the final path is safe
-  const validationResult = validateRoutePath(commands, waypoints[0], workspaces);
+  const validationResult = validateRoutePath(commands, simplifiedWaypoints[0], workspaces);
   if (!validationResult.isSafe && validationResult.minClearance < MIN_CLEARANCE) {
     // If route is unsafe, try to refine by increasing clearance penalties
     // For now, we'll return the route but mark it as having low clearance
@@ -1006,15 +1257,15 @@ function hybridStepBumpRoute(
   }
   
   // Calculate route metrics (using actual curve clearance)
-  const clearance = Math.max(validationResult.minClearance, calculateRouteClearance(waypoints, workspaces));
-  const cost = calculatePathCost(waypoints, segments);
+  const clearance = Math.max(validationResult.minClearance, calculateRouteClearance(simplifiedWaypoints, workspaces));
+  const cost = calculatePathCost(simplifiedWaypoints, segments);
   
   return {
     controlPoints,
     order: 3, // Cubic Bézier
     cost,
     clearance,
-    waypoints,
+    waypoints: simplifiedWaypoints,
     segments,
   };
 }
@@ -1111,7 +1362,9 @@ function calculatePathCost(waypoints: Point[], segments: HybridSegment[]): numbe
 export function routeBezierCurve(
   start: Point,
   destination: Point,
-  allWorkspaces: Record<string, Workspace>
+  allWorkspaces: Record<string, Workspace>,
+  sourceWorkspaceId?: string,
+  targetWorkspaceId?: string
 ): BezierRoute | null {
   // Convert ALL workspaces to bounds
   const workspaceBounds: WorkspaceBounds[] = [];
@@ -1120,13 +1373,32 @@ export function routeBezierCurve(
     workspaceBounds.push(workspaceToBounds(ws));
   }
   
+  // If workspace IDs not provided, try to find them from points
+  let sourceId = sourceWorkspaceId;
+  let targetId = targetWorkspaceId;
+  
+  if (!sourceId || !targetId) {
+    const found = findWorkspaceIdsFromPoints(start, destination, allWorkspaces);
+    sourceId = sourceId || found.sourceId;
+    targetId = targetId || found.targetId;
+  }
+  
   // Check for direct path with improved clearance checking
-  if (hasDirectPath(start, destination, workspaceBounds)) {
+  // Only use direct path for forward connections (not backward)
+  const isBackward = destination.x < start.x;
+  if (!isBackward && hasDirectPath(start, destination, workspaceBounds)) {
     return generateDirectPath(start, destination);
   }
   
-  // Otherwise use hybrid algorithm
-  return hybridStepBumpRoute(destination, start, workspaceBounds);
+  // Otherwise use hybrid algorithm (always for backward, or when direct path blocked)
+  return hybridStepBumpRoute(
+    destination, 
+    start, 
+    workspaceBounds,
+    sourceId,
+    targetId,
+    allWorkspaces
+  );
 }
 
 /**

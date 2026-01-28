@@ -242,7 +242,7 @@ export function renderConnections(
       // Use optimized Bézier routing for backward connections or when workspaces need avoidance
       let useOptimizedRouting = isBackward;
       
-      // For backward routing, use the A*-inspired router
+      // For backward routing, use the elbow connection router (step-based like d3 curveStep)
       if (useOptimizedRouting) {
         const start: Point = { x: fromX, y: fromY };
         const destination: Point = { x: lineEndX, y: lineEndY };
@@ -250,7 +250,9 @@ export function renderConnections(
         const route = routeBezierCurve(
           start,
           destination,
-          workspaces
+          workspaces,
+          fromWs.id,  // sourceWorkspaceId
+          toId        // targetWorkspaceId
         );
         
         if (route && route.controlPoints.length > 0) {
@@ -448,7 +450,9 @@ export function renderConnections(
         const route = routeBezierCurve(
           start,
           destination,
-          workspaces
+          workspaces,
+          fromWs.id,  // sourceWorkspaceId
+          undefined   // targetWorkspaceId (not connected yet, just preview)
         );
         
         if (route && route.controlPoints.length > 0) {
