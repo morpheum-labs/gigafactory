@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '../../stores/settings';
 import { useConfigStore } from '../../stores/config';
 import { useUIStore } from '../../stores/ui';
+import { useWorkspacesStore } from '../../stores/workspaces';
+import { useViewportStore } from '../../stores/viewport';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
 import { api } from '../../utils/api';
+import { buildProjectExport, downloadProjectExport } from '../../utils/projectExport';
 import type { CliType } from '../../types/workspace';
 
 const AGENT_CLIS: { id: CliType; label: string; icon: string }[] = [
@@ -22,11 +25,14 @@ export function SettingsPanel() {
   const { settings, setSettings, cliAvailability, setCliAvailability } = useSettingsStore();
   const { config, loadConfig, saveConfig } = useConfigStore();
   const { settingsPanelOpen, toggleSettingsPanel } = useUIStore();
+  const workspaces = useWorkspacesStore((state) => state.workspaces);
+  const viewportState = useViewportStore((state) => state.viewportState);
   const [localSettings, setLocalSettings] = useState(settings);
   const [hasChanges, setHasChanges] = useState(false);
   const [checkingClis, setCheckingClis] = useState(false);
   const [configPaths, setConfigPaths] = useState({ skillsPath: '', workspaceDirectory: '' });
   const [savingConfig, setSavingConfig] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const checkCliAvailability = useCallback(async () => {
     setCheckingClis(true);
@@ -106,6 +112,21 @@ export function SettingsPanel() {
     }
     setHasChanges(false);
     toggleSettingsPanel();
+  };
+
+  const handleExportProject = () => {
+    setExporting(true);
+    try {
+      const payload = buildProjectExport({
+        config,
+        settings,
+        workspaces,
+        viewport: viewportState,
+      });
+      downloadProjectExport(payload);
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (!settingsPanelOpen) return null;
@@ -260,6 +281,26 @@ export function SettingsPanel() {
                     <code className="bg-gray-800 px-1 rounded">~</code> for your home directory.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            {/* Project Section: Import / Export */}
+            <div>
+              <h3 className="text-lg font-medium text-gray-200 mb-4">Project</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Export or import the full project: paths, workspaces, positions, connections, CLI/model options, prompts, skills path, system prompts, and viewport — everything needed to restore the workspace layout.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  variant="primary"
+                  onClick={handleExportProject}
+                  disabled={exporting}
+                >
+                  {exporting ? 'Exporting...' : 'Export project'}
+                </Button>
+                <span className="text-sm text-gray-500 self-center">
+                  Saves a JSON file with all project data.
+                </span>
               </div>
             </div>
           </div>
